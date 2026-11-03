@@ -2929,6 +2929,49 @@ const routes = {
     json(res, 200, { clients });
   },
 
+  // One client, read-only. Someone else's client answers the same as nobody at all. Photos and
+  // videos stay the owner's own, as in the admin drill-down.
+  'GET /api/trainer/client': async (req, res) => {
+    const trainer = requireTrainer(req, res); if (!trainer) return;
+    const id = new URL(req.url, 'http://x').searchParams.get('id');
+    const u = db.users.find(x => x.id === id && x.trainerId === trainer.id);
+    if (!u) return json(res, 404, { error: 'no such client' });
+    const S = readState(u.id) || {};
+    json(res, 200, {
+      user: { id: u.id, name: u.name, created: u.created || null, disabled: !!u.disabled },
+      unit: S.unit || 'kg',
+      lastSync: lastSyncOf(u, S),
+      routines: records(S.routines),
+      week: S.week && typeof S.week === 'object' ? S.week : {},
+      customEx: records(S.customEx),
+      bodyweight: records(S.bodyweight),
+      measurements: records(S.measurements),
+      measurementEnabled: Array.isArray(S.measurementEnabled) ? S.measurementEnabled : undefined,
+      customMeasurements: records(S.customMeasurements),
+      workouts: records(S.workouts).reverse().map(({ media, ...w }) => w)
+    });
+  },
+
+  // Who can see this profile's training, and the way out. Only the name: a client has no business
+  // with anything else of the trainer's.
+  'GET /api/account/trainer': async (req, res) => {
+    const user = readSession(req);
+    if (!user) return json(res, 401, { error: 'not signed in' });
+    const trainer = user.trainerId ? db.users.find(u => u.id === user.trainerId) : null;
+    json(res, 200, { trainer: trainer ? { name: trainer.name } : null });
+  },
+
+  'POST /api/account/trainer/unlink': async (req, res) => {
+    const user = readSession(req);
+    if (!user) return json(res, 401, { error: 'not signed in' });
+    if (user.trainerId) {
+      delete user.trainerId;
+      saveDb();
+      audit(req, 'account.trainer.unlink', { user });
+    }
+    json(res, 200, { ok: true });
+  },
+
   'GET /api/trainer/invites': async (req, res) => {
     const trainer = requireTrainer(req, res); if (!trainer) return;
     json(res, 200, { invites: db.invites.filter(i => i.trainerId === trainer.id && !i.usedBy) });

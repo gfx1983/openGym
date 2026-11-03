@@ -2604,6 +2604,34 @@ paths:
         '200': { description: 'Name, sign-up date and workout summary of each client.' }
         '401': { description: Not signed in. }
         '403': { description: Not a trainer. }
+  /api/trainer/client:
+    get:
+      tags: [admin]
+      operationId: trainerClient
+      summary: "One of the caller's clients, read-only"
+      parameters:
+        - { name: id, in: query, required: true, schema: { type: string } }
+      responses:
+        '200': { description: 'Workouts without media, body weight, measurements, routines and the week.' }
+        '401': { description: Not signed in. }
+        '403': { description: Not a trainer. }
+        '404': { description: "No such client among the caller's own." }
+  /api/account/trainer:
+    get:
+      tags: [admin]
+      operationId: accountTrainer
+      summary: "The name of the caller's trainer, or null"
+      responses:
+        '200': { description: The trainer's name, or null. }
+        '401': { description: Not signed in. }
+  /api/account/trainer/unlink:
+    post:
+      tags: [admin]
+      operationId: accountTrainerUnlink
+      summary: 'Leave the trainer: they stop seeing this profile'
+      responses:
+        '200': { description: Unlinked, or there was no trainer. }
+        '401': { description: Not signed in. }
   /api/trainer/invites:
     get:
       tags: [admin]

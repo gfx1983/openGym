@@ -73,6 +73,7 @@ const LABELS = {
   'trainer.invite.create': 'A trainer created an invite code',
   'trainer.invite.revoke': 'A trainer revoked an invite code',
   'trainer.denied': 'Blocked from a trainer action',
+  'account.trainer.unlink': 'A client left their trainer',
   'admin.audit.clear': 'Cleared the activity log',
   // FIRST_USER_ADMIN=1: the first profile on a fresh instance is made admin as it signs up.
   'admin.first-user': 'Became admin as the first profile',

@@ -39,13 +39,13 @@ function InvitesCard({ invites, reload }) {
   </div>
 }
 
-function ClientsCard({ clients, error }) {
+function ClientsCard({ clients, error, open }) {
   return <div className="card">
     <h2 style={{ margin: 0 }}>Клиенты</h2>
     {error ? <div className="adm-empty">Не удалось загрузить: {error}</div>
       : !clients ? <div className="adm-empty">Загрузка…</div>
       : !clients.length ? <div className="adm-empty">Клиентов пока нет. Создайте код и отправьте его человеку.</div>
-      : clients.map(c => <div key={c.id} className="row between" style={{ padding: '8px 0', borderBottom: 'var(--hair) solid var(--sep)' }}>
+      : clients.map(c => <button key={c.id} className="row between" onClick={() => open(c.id)} style={{ width: '100%', background: 'none', border: 0, borderBottom: 'var(--hair) solid var(--sep)', color: 'inherit', padding: '8px 0', textAlign: 'start' }}>
         <div>
           <div>{c.name}{c.disabled ? ' · отключён' : ''}</div>
           <div className="dim small">С нами с {c.created ? fmtDate(c.created.slice(0, 10)) : '–'}</div>
@@ -54,7 +54,7 @@ function ClientsCard({ clients, error }) {
           <div>Тренировок: {c.workouts}</div>
           <div>{c.lastWorkout ? 'Последняя: ' + fmtDate(c.lastWorkout) : 'Тренировок ещё не было'}</div>
         </div>
-      </div>)}
+      </button>)}
   </div>
 }
 
@@ -73,7 +73,7 @@ export default function Trainer() {
       <div style={{ flex: 1, marginInlineStart: 12 }}><h1 style={{ margin: 0 }}>Мои клиенты</h1></div>
       <button className="iconbtn" onClick={() => { loadClients(); loadInvites() }} aria-label="Обновить">↻</button>
     </div>
-    <ClientsCard clients={clients} error={clientsErr} />
+    <ClientsCard clients={clients} error={clientsErr} open={id => nav('/trainer/client/' + encodeURIComponent(id))} />
     <InvitesCard invites={invites} reload={loadInvites} />
   </div>
 }

@@ -245,7 +245,7 @@ main.api-main .lead { color: var(--fg-2); max-width: 58ch; margin: 14px 0 0; fon
   <p class="api-facts">
     <span>OpenAPI 3.1.0</span>
     <span>openGym v1.4.3</span>
-    <span>80 endpoints</span>
+    <span>83 endpoints</span>
     <span>AGPL-3.0-or-later</span>
   </p>
 
@@ -3091,6 +3091,98 @@ main.api-main .lead { color: var(--fg-2); max-width: 58ch; margin: 14px 0 0; fon
   <div class="prow rrow">
     <span class="r-code s4">403</span>
     <span class="p-desc">Not a trainer.</span>
+  </div>
+    </div>
+  </div>
+</details>
+
+<details class="ep" id="op-trainerClient">
+  <summary>
+    <span class="m get">GET</span>
+    <span class="ep-path"><code>/api/trainer/client</code><span class="ep-chip admin">admin</span></span>
+    <span class="ep-chev" aria-hidden="true"></span>
+    <span class="ep-sum">One of the caller's clients, read-only</span>
+  </summary>
+  <div class="ep-body">
+
+    <p class="ep-auth"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><rect x="4" y="11" width="16" height="10" rx="2.5"/><path d="M8 11V7a4 4 0 0 1 8 0v4"/></svg><span>Admin only: a signed-in session whose user is an admin (<code>ADMIN_UIDS</code> or <code>admin:true</code>), as the session cookie or a Bearer token.</span></p>
+<p class="ep-h">Query parameters</p><div class="ptab">
+  <div class="prow">
+    <span class="p-name">id<em class="p-req" title="required">required</em></span>
+    <span class="p-type">string</span>
+    <span class="p-desc"></span>
+  </div>
+</div>
+
+    <p class="ep-h">Responses</p>
+    <div class="ptab">
+  <div class="prow rrow">
+    <span class="r-code s2">200</span>
+    <span class="p-desc">Workouts without media, body weight, measurements, routines and the week.</span>
+  </div>
+  <div class="prow rrow">
+    <span class="r-code s4">401</span>
+    <span class="p-desc">Not signed in.</span>
+  </div>
+  <div class="prow rrow">
+    <span class="r-code s4">403</span>
+    <span class="p-desc">Not a trainer.</span>
+  </div>
+  <div class="prow rrow">
+    <span class="r-code s4">404</span>
+    <span class="p-desc">No such client among the caller's own.</span>
+  </div>
+    </div>
+  </div>
+</details>
+
+<details class="ep" id="op-accountTrainer">
+  <summary>
+    <span class="m get">GET</span>
+    <span class="ep-path"><code>/api/account/trainer</code><span class="ep-chip admin">admin</span></span>
+    <span class="ep-chev" aria-hidden="true"></span>
+    <span class="ep-sum">The name of the caller's trainer, or null</span>
+  </summary>
+  <div class="ep-body">
+
+    <p class="ep-auth"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><rect x="4" y="11" width="16" height="10" rx="2.5"/><path d="M8 11V7a4 4 0 0 1 8 0v4"/></svg><span>Admin only: a signed-in session whose user is an admin (<code>ADMIN_UIDS</code> or <code>admin:true</code>), as the session cookie or a Bearer token.</span></p>
+
+
+    <p class="ep-h">Responses</p>
+    <div class="ptab">
+  <div class="prow rrow">
+    <span class="r-code s2">200</span>
+    <span class="p-desc">The trainer's name</span>
+  </div>
+  <div class="prow rrow">
+    <span class="r-code s4">401</span>
+    <span class="p-desc">Not signed in.</span>
+  </div>
+    </div>
+  </div>
+</details>
+
+<details class="ep" id="op-accountTrainerUnlink">
+  <summary>
+    <span class="m post">POST</span>
+    <span class="ep-path"><code>/api/account/trainer/unlink</code><span class="ep-chip admin">admin</span></span>
+    <span class="ep-chev" aria-hidden="true"></span>
+    <span class="ep-sum">Leave the trainer: they stop seeing this profile</span>
+  </summary>
+  <div class="ep-body">
+
+    <p class="ep-auth"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><rect x="4" y="11" width="16" height="10" rx="2.5"/><path d="M8 11V7a4 4 0 0 1 8 0v4"/></svg><span>Admin only: a signed-in session whose user is an admin (<code>ADMIN_UIDS</code> or <code>admin:true</code>), as the session cookie or a Bearer token.</span></p>
+
+
+    <p class="ep-h">Responses</p>
+    <div class="ptab">
+  <div class="prow rrow">
+    <span class="r-code s2">200</span>
+    <span class="p-desc">Unlinked</span>
+  </div>
+  <div class="prow rrow">
+    <span class="r-code s4">401</span>
+    <span class="p-desc">Not signed in.</span>
   </div>
     </div>
   </div>

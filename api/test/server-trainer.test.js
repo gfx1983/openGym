@@ -167,3 +167,58 @@ test('deleting a trainer unlinks their clients and voids their unused codes', as
   const users = (await (await h.get('/api/admin/users', ADMIN)).json()).users;
   assert.equal(users.find(u => u.id === CLIENT).trainerId, null);
 });
+
+const CLIENT_STATE = {
+  unit: 'kg',
+  workouts: [{ id: 'w1', d: '2026-11-01', name: 'Legs', entries: [], media: ['secret-photo'] }, { id: 'w2', d: '2026-11-02', name: 'Back', entries: [] }],
+  bodyweight: [{ d: '2026-11-01', w: 60 }],
+  measurements: [{ d: '2026-11-01', waist: 70 }],
+  routines: [{ id: 'r1', name: 'Legs', ex: [{ id: 'squat', sets: 3, reps: 10 }] }],
+  week: { 1: ['r1'] },
+  coach: { chat: [{ text: 'private chat with the Assistant' }] },
+  exNotes: { squat: 'private note' }
+};
+
+test('a trainer reads their own client and nobody else, and gets only what the page shows', async t => {
+  const h = await startServer(t);
+  const url = id => `/api/trainer/client?id=${encodeURIComponent(id)}`;
+  // The client saves their own data the way a device does.
+  assert.equal((await h.call('PUT', '/api/data', CLIENT, { state: CLIENT_STATE })).status, 200);
+
+  const r = await h.get(url(CLIENT), TRAINER);
+  assert.equal(r.status, 200);
+  const d = await r.json();
+  assert.deepEqual(d.workouts.map(w => w.id), ['w2', 'w1'], 'newest first');
+  assert.equal(d.workouts[1].media, undefined, 'photos and videos stay the owner\'s');
+  assert.equal(d.bodyweight.length, 1);
+  assert.equal(d.measurements[0].waist, 70);
+  assert.equal(d.routines[0].ex[0].id, 'squat');
+  assert.deepEqual(d.week, { 1: ['r1'] });
+  const raw = JSON.stringify(d);
+  assert.equal(raw.includes('private chat'), false, 'the Assistant chat is not the trainer\'s');
+  assert.equal(raw.includes('private note'), false);
+  assert.equal(raw.includes('passkey') || raw.includes('"pw"') || raw.includes('email'), false);
+
+  assert.equal((await h.get(url(CLIENT), OTHER)).status, 404, 'another trainer');
+  assert.equal((await h.get(url(PLAIN), TRAINER)).status, 404, 'someone who is not a client');
+  assert.equal((await h.get(url(ADMIN), TRAINER)).status, 404, 'the admin');
+  assert.equal((await h.get(url('nobody'), TRAINER)).status, 404);
+  assert.equal((await h.get(url(CLIENT), ADMIN)).status, 403, 'an admin uses the admin page');
+  assert.equal((await h.get(url(CLIENT), CLIENT)).status, 403, 'a client');
+  assert.equal((await h.get(url(CLIENT), null)).status, 401);
+});
+
+test('a client sees who their trainer is and can leave, which ends the access at once', async t => {
+  const h = await startServer(t);
+  assert.deepEqual(await (await h.get('/api/account/trainer', CLIENT)).json(), { trainer: { name: 'Trainer' } });
+  assert.deepEqual(await (await h.get('/api/account/trainer', PLAIN)).json(), { trainer: null });
+  assert.equal((await h.get('/api/account/trainer', null)).status, 401);
+  assert.equal((await h.post('/api/account/trainer/unlink', null)).status, 401);
+
+  assert.equal((await h.get(`/api/trainer/client?id=${CLIENT}`, TRAINER)).status, 200);
+  assert.equal((await h.post('/api/account/trainer/unlink', CLIENT)).status, 200);
+  assert.deepEqual(await (await h.get('/api/account/trainer', CLIENT)).json(), { trainer: null });
+  assert.equal((await h.get(`/api/trainer/client?id=${CLIENT}`, TRAINER)).status, 404);
+  assert.deepEqual((await (await h.get('/api/trainer/clients', TRAINER)).json()).clients, []);
+  assert.equal((await h.post('/api/account/trainer/unlink', CLIENT)).status, 200, 'leaving twice is not an error');
+});

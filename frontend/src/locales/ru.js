@@ -555,7 +555,7 @@ export default {
   'Small': 'Малая',
   'Hidden': 'Скрыта',
   'Invite code': 'Код приглашения',
-  'This app is invite-only. Enter the code you were given.': 'Приложение только по приглашению. Введите выданный вам код.',
+  'This app is invite-only. Enter the code you were given.': 'Приложение только по приглашению. Введите выданный вам код. Если код выдал тренер, он будет видеть ваши тренировки, вес, замеры и программы.',
   'An invite code is required': 'Требуется код приглашения',
   'Admin dashboard': 'Панель администратора',
   // --- muscle map ---

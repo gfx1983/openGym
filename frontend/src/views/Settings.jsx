@@ -45,6 +45,7 @@ import { durationSheet } from '../components/DurationWheel.jsx'
 import { showsConnection, showsLocalLine } from '../components/SyncBanner.jsx'
 import BackupFolderRow, { useBackupFolder, autoBackupSubtitle } from '../components/BackupFolderRow.jsx'
 import AppIconRow from '../components/AppIconRow.jsx'
+import MyTrainerRow from '../components/MyTrainerRow.jsx'
 import { AnimationQualityRow } from '../components/Animations.jsx'
 import { ServerSyncSection, KeptChangesRows, leaveServer, connectServer, passkeySignIn } from '../components/ServerSync.jsx'
 import { passwordOn, PasswordRow, openPasswordSignIn, openPasswordRegister } from '../components/PasswordAuth.jsx'
@@ -1006,6 +1007,7 @@ export default function Settings({ page = null, find = null, via = null, entryKe
         {MOBILE && <>
           {user.admin && <Row icon="crown" iconTint="var(--indigo)" title={t('Admin dashboard')} accessory="chevron" onClick={() => nav('/admin')} />}
           {user.trainer && <Row icon="person" iconTint="var(--indigo)" title="Мои клиенты" accessory="chevron" onClick={() => nav('/trainer')} />}
+          <MyTrainerRow />
           {/* A code to sign in on a computer (#551), behind the same proof as in a browser. */}
           <DeviceLinkRow state={passkeys.st} />
           <AccountIdRow id={user.id} />
@@ -1031,6 +1033,7 @@ export default function Settings({ page = null, find = null, via = null, entryKe
         </> : user ? <>
           {user.admin && <Row icon="crown" iconTint="var(--indigo)" title={t('Admin dashboard')} accessory="chevron" onClick={() => nav('/admin')} />}
           {user.trainer && <Row icon="person" iconTint="var(--indigo)" title="Мои клиенты" accessory="chevron" onClick={() => nav('/trainer')} />}
+          <MyTrainerRow />
           <PasskeysRow state={passkeys.st} changed={credsChanged} />
           <DeviceLinkRow state={passkeys.st} />
           <Row icon="qr" iconTint="var(--blue)" title={t('Pair the mobile app')} subtitle={t('Connect the openGym app on your phone to this account.')} accessory="chevron"

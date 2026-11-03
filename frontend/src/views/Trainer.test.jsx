@@ -7,9 +7,9 @@ import Trainer from './Trainer.jsx'
 
 globalThis.IS_REACT_ACT_ENVIRONMENT = true
 
-const mocks = vi.hoisted(() => ({ answers: {}, calls: [], toast: () => {} }))
+const mocks = vi.hoisted(() => ({ answers: {}, calls: [], toast: () => {}, nav: () => {} }))
 
-vi.mock('react-router-dom', () => ({ useNavigate: () => () => {} }))
+vi.mock('react-router-dom', () => ({ useNavigate: () => mocks.nav }))
 vi.mock('../lib/api.js', () => ({
   api: (url, opts) => {
     mocks.calls.push([url, opts?.method || 'GET'])
@@ -31,6 +31,7 @@ const render = async () => {
 beforeEach(() => {
   mocks.calls = []
   mocks.toast = vi.fn()
+  mocks.nav = vi.fn()
   mocks.answers = {
     '/api/trainer/clients': { clients: [{ id: 'c1', name: 'Ира', created: '2026-11-01T10:00:00Z', workouts: 3, lastWorkout: '2026-11-02' }] },
     '/api/trainer/invites': { invites: [{ code: 'ABCD1234' }] },
@@ -48,6 +49,13 @@ describe('Trainer', () => {
     expect(host.textContent).toContain('Ира')
     expect(host.textContent).toContain('Тренировок: 3')
     expect(host.textContent).toContain('ABCD1234')
+  })
+
+  it('opens a client', async () => {
+    await render()
+    const row = [...host.querySelectorAll('button')].find(b => b.textContent.includes('Ира'))
+    await act(async () => { row.click() })
+    expect(mocks.nav).toHaveBeenCalledWith('/trainer/client/c1')
   })
 
   it('says so when there are no clients yet', async () => {
