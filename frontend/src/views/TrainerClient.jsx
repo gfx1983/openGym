@@ -6,14 +6,21 @@ import { exOr } from '../lib/exercises.js'
 import { setLabel, setsDone, workoutVolume } from '../lib/history.js'
 import { weighInAt } from '../lib/bodyweight.js'
 import { enabledMeasurementFields, measurementUnit, measurementValue, toMeasurementDisplay, MEASUREMENT_FIELDS } from '../lib/measurements.js'
+import { copyClientRoutine } from '../lib/trainer-plan.js'
 import { t } from '../lib/i18n.js'
+import { useStore } from '../store/useStore.js'
+import { useUI } from '../store/useUI.js'
+import { confirmSheet } from '../sheets.jsx'
 import Icon from '../components/Icon.jsx'
 import LineChart from '../components/LineChart.jsx'
+import { Button } from '../components/ui.jsx'
+import TrainerSendPlan from '../components/TrainerSendPlan.jsx'
 import '../admin.css'
 
-// One client, read-only: what they logged and what they follow. The document comes straight off
-// their state file, so anything shapeless is skipped rather than drawn, as in the admin drill-down.
-// Russian-only, like Trainer.jsx.
+// One client: what they logged and what they follow. The document comes straight off their state
+// file, so anything shapeless is skipped rather than drawn, as in the admin drill-down. Nothing here
+// writes to it: a change is made on a copy in the trainer's own Plan and sent as a plan the client
+// applies (lib/trainer-plan.js). Russian-only, like Trainer.jsx.
 
 // getDay() order, shown Monday first.
 const DAYS = [[1, 'Пн'], [2, 'Вт'], [3, 'Ср'], [4, 'Чт'], [5, 'Пт'], [6, 'Сб'], [0, 'Вс']]
@@ -24,6 +31,27 @@ function exTarget(e) {
   if (e.sec) return `${e.sets || 0} × ${e.sec} с`
   const reps = e.repsMin && e.repsMax ? `${e.repsMin}–${e.repsMax}` : e.reps || 0
   return `${e.sets || 0} × ${reps}${e.weight ? ` · ${e.weight}` : ''}`
+}
+
+const PLAN_STATUS = { pending: 'Ждёт решения клиента', applied: 'Клиент применил', declined: 'Клиент отклонил', undone: 'Клиент применил, затем отменил' }
+
+function PlanStatus({ plan, id, setPlan }) {
+  const toast = useUI(s => s.toast)
+  if (!plan) return null
+  const withdraw = () => confirmSheet({
+    title: 'Отозвать программу?',
+    message: 'Клиент её больше не увидит.',
+    confirmText: 'Отозвать', danger: true,
+    onConfirm: () => api('/api/trainer/client/plan/withdraw', { method: 'POST', body: JSON.stringify({ id }) })
+      .then(() => { setPlan(null); toast('Программа отозвана') }).catch(e => toast(e.message))
+  })
+  return <div className="row between" style={{ marginTop: 8, gap: 8 }}>
+    <div className="dim small">
+      {PLAN_STATUS[plan.status] || plan.status}, {fmtDate((plan.resolvedAt || plan.at).slice(0, 10), true)}
+      {plan.routines?.length ? ': ' + plan.routines.join(', ') : ''}
+    </div>
+    {plan.status === 'pending' && <Button size="sm" onClick={withdraw}>Отозвать</Button>}
+  </div>
 }
 
 function Workout({ w, unit, nameOf }) {
@@ -51,6 +79,8 @@ export default function TrainerClient() {
   const { id } = useParams()
   const [d, setD] = useState(null)
   const [err, setErr] = useState(null)
+  const update = useStore(s => s.update)
+  const openSheet = useUI(s => s.openSheet)
   useEffect(() => { api('/api/trainer/client?id=' + encodeURIComponent(id)).then(setD).catch(e => setErr(e.message)) }, [id])
 
   const header = title => <div className="hdr">
@@ -71,11 +101,18 @@ export default function TrainerClient() {
   const week = DAYS.map(([k, label]) => [label, [].concat(d.week?.[k] || []).map(routineName).filter(Boolean)]).filter(([, names]) => names.length)
   const fields = enabledMeasurementFields(d)
   const latest = measurements[measurements.length - 1]
+  const setPlan = plan => setD(x => ({ ...x, plan }))
+  const edit = r => {
+    let copy
+    update(s => { copy = copyClientRoutine(s, d, r) })
+    nav('/plan/r/' + encodeURIComponent(copy))
+  }
+  const send = () => openSheet(close => <TrainerSendPlan client={d} close={close} onSent={setPlan} />)
   const readings = latest ? fields.map(f => [f, measurementValue(latest, f.key)]).filter(([, v]) => v != null) : []
 
   return <div className="narrow">
     {header(d.user.name)}
-    <div className="adm-lead" style={{ marginBottom: 12 }}>Только просмотр · с нами с {d.user.created ? fmtDate(d.user.created.slice(0, 10)) : '–'}</div>
+    <div className="adm-lead" style={{ marginBottom: 12 }}>С нами с {d.user.created ? fmtDate(d.user.created.slice(0, 10)) : '–'}</div>
 
     <div className="card">
       <h2 style={{ margin: 0 }}>Вес тела</h2>
@@ -101,11 +138,16 @@ export default function TrainerClient() {
     </div>
 
     <div className="card">
-      <h2 style={{ margin: 0 }}>Программы</h2>
+      <div className="row between"><h2 style={{ margin: 0 }}>Программы</h2>
+        <Button variant="primary" size="sm" icon="plus" onClick={send}>Отправить</Button></div>
+      <PlanStatus plan={d.plan} id={d.user.id} setPlan={setPlan} />
       {week.length > 0 && <div className="dim small" style={{ marginTop: 6 }}>{week.map(([day, names]) => day + ': ' + names.join(', ')).join(' · ')}</div>}
       {routines.length
         ? routines.map(r => <div key={r.id} style={{ padding: '8px 0', borderBottom: '1px solid var(--sep)' }}>
-          <div className="small" style={{ fontWeight: 600 }}>{r.emoji ? r.emoji + ' ' : ''}{r.name || 'Без названия'}</div>
+          <div className="row between" style={{ gap: 8 }}>
+            <div className="small" style={{ fontWeight: 600 }}>{r.emoji ? r.emoji + ' ' : ''}{r.name || 'Без названия'}</div>
+            <Button size="sm" onClick={() => edit(r)}>Изменить</Button>
+          </div>
           {list(r.ex).map((e, i) => <div key={e.id + ':' + i} className="row between dim" style={{ fontSize: '.75rem', padding: '2px 0' }}>
             <span>{nameOf(e.id)}</span><span>{exTarget(e)}</span>
           </div>)}

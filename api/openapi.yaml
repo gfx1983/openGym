@@ -3113,6 +3113,70 @@ paths:
       responses:
         '200': { description: Unlinked, or there was no trainer. }
         '401': { description: Not signed in. }
+  /api/account/trainer/plan/resolve:
+    post:
+      tags: [admin]
+      operationId: accountTrainerPlanResolve
+      summary: 'Say what became of the plan the trainer sent: applied, declined or undone'
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [id, decision]
+              properties:
+                id: { type: string }
+                decision: { type: string, enum: [applied, declined, undone] }
+      responses:
+        '200': { description: Recorded. }
+        '400': { description: Not a decision. }
+        '401': { description: Not signed in. }
+        '409': { description: That plan is no longer waiting. }
+  /api/trainer/client/plan:
+    post:
+      tags: [admin]
+      operationId: trainerClientPlan
+      summary: "Send one of the caller's clients a plan to apply, replacing one still waiting"
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [id, bundle]
+              properties:
+                id: { type: string }
+                bundle: { type: object, description: 'The routines and week, as a plan file holds them.' }
+                targets: { type: object, description: "Which of the client's routines each sent routine replaces.", additionalProperties: { type: string } }
+                removed: { type: array, items: { type: string } }
+                schedule: { type: boolean, description: "Whether the bundle's week replaces the client's." }
+                note: { type: string }
+      responses:
+        '200': { description: Sent. }
+        '400': { description: Not a plan, or too large. }
+        '401': { description: Not signed in. }
+        '403': { description: Not a trainer. }
+        '404': { description: 'Not a client of the caller.' }
+  /api/trainer/client/plan/withdraw:
+    post:
+      tags: [admin]
+      operationId: trainerClientPlanWithdraw
+      summary: 'Take back a plan the client has not decided on'
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [id]
+              properties:
+                id: { type: string }
+      responses:
+        '200': { description: Withdrawn, or nothing was waiting. }
+        '401': { description: Not signed in. }
+        '403': { description: Not a trainer. }
+        '404': { description: 'Not a client of the caller.' }
   /api/trainer/invites:
     get:
       tags: [admin]

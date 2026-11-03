@@ -370,6 +370,7 @@ export default function RoutineEdit() {
   const toast = useUI(s => s.toast)
   const r = S.routines.find(x => x.id === id)
   useEffect(() => { if (!r) nav('/plan') }, [!!r])
+  const backTo = r?.clientCopy?.client ? '/trainer/client/' + encodeURIComponent(r.clientCopy.client) : '/plan'
   // Editing here has no explicit "save" — every field change persists immediately. A single
   // auto-backup on the way out (not per keystroke) covers the whole editing session, deletion
   // included: this still unmounts after the delete button navigates away.
@@ -460,7 +461,8 @@ export default function RoutineEdit() {
 
   return <div className="narrow">
     <div className="hdr">
-      <button className="iconbtn" data-back="/plan" data-tour="routine-back" onClick={() => nav('/plan')} aria-label={t('Plan')}><Icon name="chevronLeft" /></button>
+      {/* A trainer's copy of a client's routine goes back to that client (lib/trainer-plan.js). */}
+      <button className="iconbtn" data-back={backTo} data-tour="routine-back" onClick={() => nav(backTo)} aria-label={t('Plan')}><Icon name="chevronLeft" /></button>
       <div style={{ flex: 1, margin: '0 12px' }}>
         <input className="input" data-tour="routine-name" aria-label={t('Routine name')} defaultValue={r.name} style={{ fontWeight: 600, fontSize: 'var(--fs-title3)', letterSpacing: '-.021em' }}
           onChange={e => update(s => { s.routines.find(x => x.id === id).name = e.target.value.trim() || t('Routine') })} />

@@ -49,7 +49,7 @@ async function startServer(t, env = {}) {
     headers: { ...(uid ? { Cookie: `gymsid=${mint(uid)}` } : {}), ...(body ? { 'Content-Type': 'application/json' } : {}) },
     ...(body ? { body: JSON.stringify(body) } : {})
   });
-  return { call, get: (url, uid) => call('GET', url, uid), post: (url, uid, body = {}) => call('POST', url, uid, body) };
+  return { dataDir, call, get: (url, uid) => call('GET', url, uid), post: (url, uid, body = {}) => call('POST', url, uid, body) };
 }
 
 const signUp = (h, name, code) => h.post('/api/register/password', null, { name, code, password: 'long enough to pass 17' });
@@ -210,15 +210,116 @@ test('a trainer reads their own client and nobody else, and gets only what the p
 
 test('a client sees who their trainer is and can leave, which ends the access at once', async t => {
   const h = await startServer(t);
-  assert.deepEqual(await (await h.get('/api/account/trainer', CLIENT)).json(), { trainer: { name: 'Trainer' } });
-  assert.deepEqual(await (await h.get('/api/account/trainer', PLAIN)).json(), { trainer: null });
+  assert.deepEqual(await (await h.get('/api/account/trainer', CLIENT)).json(), { trainer: { id: TRAINER, name: 'Trainer' }, plan: null });
+  assert.deepEqual(await (await h.get('/api/account/trainer', PLAIN)).json(), { trainer: null, plan: null });
   assert.equal((await h.get('/api/account/trainer', null)).status, 401);
   assert.equal((await h.post('/api/account/trainer/unlink', null)).status, 401);
 
   assert.equal((await h.get(`/api/trainer/client?id=${CLIENT}`, TRAINER)).status, 200);
   assert.equal((await h.post('/api/account/trainer/unlink', CLIENT)).status, 200);
-  assert.deepEqual(await (await h.get('/api/account/trainer', CLIENT)).json(), { trainer: null });
+  assert.deepEqual(await (await h.get('/api/account/trainer', CLIENT)).json(), { trainer: null, plan: null });
   assert.equal((await h.get(`/api/trainer/client?id=${CLIENT}`, TRAINER)).status, 404);
   assert.deepEqual((await (await h.get('/api/trainer/clients', TRAINER)).json()).clients, []);
   assert.equal((await h.post('/api/account/trainer/unlink', CLIENT)).status, 200, 'leaving twice is not an error');
+});
+
+const PLAN = { opengym_plan: 1, unit: 'kg', week: {}, routines: [{ id: 'tr', name: 'Push', ex: [{ id: 'squat', sets: 3, reps: 8 }] }], customEx: [] };
+const sendPlan = (h, uid = TRAINER, extra = {}) => h.post('/api/trainer/client/plan', uid, { id: CLIENT, bundle: PLAN, note: 'hi', ...extra });
+const waiting = async h => (await (await h.get('/api/account/trainer', CLIENT)).json()).plan;
+
+test('a trainer can send only their own client a plan, and only a plan', async t => {
+  const h = await startServer(t);
+  assert.equal((await sendPlan(h, OTHER)).status, 404, 'another trainer');
+  assert.equal((await h.post('/api/trainer/client/plan', TRAINER, { id: PLAIN, bundle: PLAN })).status, 404, 'not a client');
+  assert.equal((await sendPlan(h, ADMIN)).status, 403);
+  assert.equal((await sendPlan(h, CLIENT)).status, 403);
+  assert.equal((await sendPlan(h, null)).status, 401);
+  assert.equal(await waiting(h), null, 'nothing got through');
+  for (const bundle of [undefined, [], { routines: [] }, { opengym_plan: 1, routines: 'x' }]) {
+    assert.equal((await h.post('/api/trainer/client/plan', TRAINER, { id: CLIENT, bundle })).status, 400);
+  }
+  assert.equal((await h.post('/api/trainer/client/plan', TRAINER, { id: CLIENT, bundle: { opengym_plan: 1, routines: [] } })).status, 400, 'nothing to send');
+  assert.equal((await sendPlan(h, TRAINER, { removed: 'x' })).status, 400);
+  assert.equal((await sendPlan(h, TRAINER, { note: 'x'.repeat(300 * 1024) })).status, 400, 'too large');
+  assert.equal(await waiting(h), null);
+});
+
+test('a plan waits for the client, says what became of it, and never touches the state file', async t => {
+  const h = await startServer(t);
+  const sent = await (await sendPlan(h)).json();
+  assert.equal(sent.plan.status, 'pending');
+  const plan = await waiting(h);
+  assert.equal(plan.id, sent.plan.id);
+  assert.equal(plan.note, 'hi');
+  assert.deepEqual(plan.bundle, PLAN);
+  assert.equal((await (await h.get('/api/account/trainer', PLAIN)).json()).plan, null);
+  const seen = await (await h.get(`/api/trainer/client?id=${CLIENT}`, TRAINER)).json();
+  assert.equal(seen.plan.status, 'pending');
+  assert.deepEqual(seen.plan.routines, ['Push']);
+  assert.equal(seen.plan.bundle, undefined);
+  assert.deepEqual((await (await h.get('/api/data', CLIENT)).json()).routines ?? [], [], 'the server wrote nothing into the profile');
+
+  const resolve = (decision, id = plan.id, uid = CLIENT) => h.post('/api/account/trainer/plan/resolve', uid, { id, decision });
+  assert.equal((await resolve('maybe')).status, 400);
+  assert.equal((await resolve('undone')).status, 409, 'nothing was applied yet');
+  assert.equal((await resolve('applied', 'old id')).status, 409);
+  assert.equal((await resolve('applied', plan.id, PLAIN)).status, 409, 'someone else cannot settle it');
+  assert.equal((await resolve('applied', plan.id, null)).status, 401);
+  assert.equal((await resolve('applied')).status, 200);
+  assert.equal(await waiting(h), null);
+  assert.equal((await resolve('declined')).status, 409, 'settled once');
+  const after = await (await h.get(`/api/trainer/client?id=${CLIENT}`, TRAINER)).json();
+  assert.equal(after.plan.status, 'applied');
+  assert.ok(after.plan.resolvedAt);
+  assert.equal((await resolve('undone', 'old id')).status, 409);
+  assert.equal((await resolve('undone')).status, 200);
+  assert.equal((await (await h.get(`/api/trainer/client?id=${CLIENT}`, TRAINER)).json()).plan.status, 'undone');
+  assert.equal((await resolve('undone')).status, 409, 'undone once');
+});
+
+test('sending again replaces what waits, and a trainer can take it back', async t => {
+  const h = await startServer(t);
+  const first = await (await sendPlan(h)).json();
+  const second = await (await sendPlan(h, TRAINER, { note: 'better' })).json();
+  assert.notEqual(first.plan.id, second.plan.id);
+  assert.equal((await waiting(h)).note, 'better');
+  assert.equal((await h.post('/api/account/trainer/plan/resolve', CLIENT, { id: first.plan.id, decision: 'applied' })).status, 409);
+  assert.equal((await h.post('/api/trainer/client/plan/withdraw', OTHER, { id: CLIENT })).status, 404);
+  assert.notEqual(await waiting(h), null, 'another trainer took nothing');
+  assert.equal((await h.post('/api/trainer/client/plan/withdraw', TRAINER, { id: CLIENT })).status, 200);
+  assert.equal(await waiting(h), null);
+  assert.equal((await h.post('/api/trainer/client/plan/withdraw', TRAINER, { id: CLIENT })).status, 200, 'twice is fine');
+});
+
+test('a plan goes when the client leaves, when the trainer stops being one, and with the account', async t => {
+  const stored = h => JSON.parse(fs.readFileSync(path.join(h.dataDir, 'db.json'), 'utf8')).trainerPlans || {};
+  await t.test('the client leaves', async t => {
+    const h = await startServer(t);
+    await sendPlan(h);
+    await h.post('/api/account/trainer/unlink', CLIENT);
+    assert.equal(await waiting(h), null);
+    assert.deepEqual(stored(h), {});
+    assert.equal((await h.post('/api/account/trainer/plan/resolve', CLIENT, { id: 'x', decision: 'applied' })).status, 409);
+  });
+  await t.test('the role is taken away', async t => {
+    const h = await startServer(t);
+    const { plan } = await (await sendPlan(h)).json();
+    assert.equal((await h.post('/api/admin/user/trainer', ADMIN, { id: TRAINER, trainer: false })).status, 200);
+    assert.equal(await waiting(h), null);
+    assert.deepEqual(stored(h), {});
+    assert.equal((await h.post('/api/account/trainer/plan/resolve', CLIENT, { id: plan.id, decision: 'applied' })).status, 409, 'the plan is gone, not just hidden');
+  });
+  await t.test('the client\'s account is deleted', async t => {
+    const h = await startServer(t);
+    await sendPlan(h);
+    assert.notDeepEqual(stored(h), {});
+    assert.equal((await h.post('/api/admin/user/delete', ADMIN, { id: CLIENT })).status, 200);
+    assert.deepEqual(stored(h), {});
+  });
+  await t.test('the trainer\'s account is deleted', async t => {
+    const h = await startServer(t);
+    await sendPlan(h);
+    assert.equal((await h.post('/api/admin/user/delete', ADMIN, { id: TRAINER })).status, 200);
+    assert.deepEqual(stored(h), {});
+  });
 });
