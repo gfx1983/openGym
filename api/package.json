@@ -7,7 +7,7 @@
   "license": "AGPL-3.0-or-later",
   "scripts": {
     "start": "node server.js",
-    "test": "node --test test/*.test.js"
+    "test": "ASSISTANT_FOR_ALL=1 node --test test/*.test.js"
   },
   "dependencies": {
     "@simplewebauthn/server": "^13.3.3",

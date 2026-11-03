@@ -166,6 +166,15 @@ function ownerId() {
   return db.users.find(isAdmin)?.id || null;
 }
 const isOwner = user => !!user && isAdmin(user) && user.id === ownerId();
+// A trainer has their own clients and nothing else of the admin's: `user.trainer` opens the
+// /api/trainer routes, `user.trainerId` on a client says whose client they are. The link comes
+// from the invite the client signed up with.
+const isTrainer = user => !!user && user.trainer === true;
+// The built-in Assistant (`coach` in the code) is for the people running the place, not for their
+// clients. Closed by default, so an instance that forgets the setting does not hand it out;
+// ASSISTANT_FOR_ALL=1 restores the upstream behaviour, and the upstream tests run under it.
+const ASSISTANT_FOR_ALL = /^(1|true|yes|on)$/i.test(process.env.ASSISTANT_FOR_ALL || '');
+const canUseAssistant = user => ASSISTANT_FOR_ALL || isAdmin(user) || isTrainer(user);
 // 0600: db.json holds passkey credential material. It used to be covered by a blanket 0700 on
 // the whole directory; now that the directory stays traversable, the file carries its own mode.
 // Once the new version is on disk, a second copy of it goes to db.json.bak, the same durable
@@ -702,6 +711,14 @@ function requireAdmin(req, res) {
   if (!isAdmin(user)) { audit(req, 'admin.denied', { ok: false, user }); json(res, 403, { error: 'forbidden' }); return null; }
   return user;
 }
+// Guard for /api/trainer/* — the same shape as requireAdmin. An admin is not a trainer by being
+// an admin: these routes answer about the caller's own clients, and an admin has none.
+function requireTrainer(req, res) {
+  const user = readSession(req);
+  if (!user) { json(res, 401, { error: 'not signed in' }); return null; }
+  if (!isTrainer(user)) { audit(req, 'trainer.denied', { ok: false, user }); json(res, 403, { error: 'forbidden' }); return null; }
+  return user;
+}
 function requireOwner(req, res) {
   const user = requireAdmin(req, res); if (!user) return null;
   if (!isOwner(user)) { audit(req, 'admin.denied', { ok: false, user }); json(res, 403, { error: 'only the owner can do this' }); return null; }
@@ -1228,7 +1245,7 @@ function loginTarget(body) {
 }
 const acctKey = u => 'acct:' + u.id;
 const passkeyCount = u => db.creds.filter(c => c.userId === u.id).length;
-const publicUser = u => ({ id: u.id, name: u.name, admin: isAdmin(u), ...(isOwner(u) ? { owner: true } : {}) });
+const publicUser = u => ({ id: u.id, name: u.name, admin: isAdmin(u), ...(isOwner(u) ? { owner: true } : {}), ...(isTrainer(u) ? { trainer: true } : {}) });
 const POLICY_ERRORS = {
   'too-short': `the password needs at least ${MIN_LENGTH} characters`,
   'too-long': `the password can have at most ${MAX_LENGTH} characters`,
@@ -1369,6 +1386,13 @@ async function removeEmail(req, res, user, body) {
   json(res, 200, { ok: true, email: null });
 }
 
+// A trainer who stops being one keeps nothing: their unused codes stop working and their clients
+// go back to being ordinary profiles, so granting the role again does not reopen old access.
+function dropTrainerLinks(trainerId) {
+  db.invites = db.invites.filter(i => i.trainerId !== trainerId || i.usedBy);
+  for (const c of db.users) if (c.trainerId === trainerId) delete c.trainerId;
+}
+
 // Everything of an account, gone for good: the user record, their passkeys, push subscriptions,
 // device links and live presence, and outside db.json their training history, any Coach
 // credential and their photos and videos. The admin's delete and the account's own both end here.
@@ -1378,6 +1402,7 @@ function removeAccount(u) {
   db.subs = (db.subs || []).filter(x => x.userId !== u.id);
   dropDeviceLinks(db, u.id);
   presence.delete(u.id);
+  dropTrainerLinks(u.id);
   // The training history and any Coach credential of theirs, both outside db.json.
   try { fs.unlinkSync(stateFile(u.id)); } catch { /* already gone */ }
   try { coachConfig.clearProfileAuth(u.id); } catch { /* nothing stored */ }
@@ -1484,7 +1509,7 @@ const passwordRoutes = {
     if (email && emailTaken(email)) return emailRefused();
     const created = new Date().toISOString();
     const user = { id: crypto.randomBytes(12).toString('base64url'), name, created, pw: { h, set: created }, ...(email ? { email } : {}) };
-    if (inv) { user.invitedBy = inv.code; inv.usedBy = user.id; inv.usedAt = created; }
+    if (inv) { user.invitedBy = inv.code; inv.usedBy = user.id; inv.usedAt = created; if (inv.trainerId) user.trainerId = inv.trainerId; }
     claimFirstAdmin(req, user);
     db.users.push(user);
     saveDb();
@@ -2135,6 +2160,7 @@ const routes = {
     // holds was made for a session: without the key it cannot tell "no Coach here" from "you
     // were not signed in when you asked", and would re-ask on every sign-in on every instance
     // that has no Coach. The key's absence is that answer.
+    const signedIn = readSession(req);
     json(res, 200, {
       invite_only: INVITE_ONLY, allow_guest: ALLOW_GUEST,
       // Only when on, so an instance without passwords answers exactly as it did before (#118).
@@ -2144,7 +2170,9 @@ const routes = {
       // Public like the two flags above: the caps are not a secret, and the absence of the
       // block is how the app knows this server does not take photos and videos at all.
       ...(MEDIA_ON ? { media: mediaConfig(MEDIA_LIMITS) } : {}),
-      ...(readSession(req) ? { coach: coachConfig.publicConfig() } : {})
+      // Null for a profile the Assistant is not for: the answer "no Coach here", which hides all of
+      // its UI, while the key still tells the client this copy was made for a session.
+      ...(signedIn ? { coach: canUseAssistant(signedIn) ? coachConfig.publicConfig() : null } : {})
     });
   },
 
@@ -2225,7 +2253,7 @@ const routes = {
       }
     }
     const user = { id: c.uid, name: c.name, created: new Date().toISOString() };
-    if (invite) { user.invitedBy = invite.code; invite.usedBy = user.id; invite.usedAt = user.created; }
+    if (invite) { user.invitedBy = invite.code; invite.usedBy = user.id; invite.usedAt = user.created; if (invite.trainerId) user.trainerId = invite.trainerId; }
     claimFirstAdmin(req, user);
     db.users.push(user);
     db.creds.push({
@@ -2550,7 +2578,8 @@ const routes = {
     let text;
     try { text = JSON.stringify(body.state); }
     catch (e) { if (e instanceof RangeError) return json(res, 400, { error: 'invalid state' }); throw e; }
-    atomicWrite(stateFile(user.id), text);
+    // 0600: a client's training and body data, readable by nobody else on the host.
+    atomicWrite(stateFile(user.id), text, 0o600);
     // The stat cache cannot see this write on its own: mtime granularity is 4 ms here (ext4 on
     // this kernel — 3901 of 3999 back-to-back same-size writes shared one timestamp), and a
     // `_rev` going from 7 to 8 does not change the file's size, so two writes inside one 4 ms
@@ -2707,6 +2736,7 @@ const routes = {
       return {
         id: u.id, name: u.name, created: u.created || null,
         disabled: !!u.disabled, admin: isAdmin(u), owner: isOwner(u), invitedBy: u.invitedBy || null,
+        trainer: isTrainer(u), trainerId: u.trainerId || null,
         workouts: workouts.length,
         lastWorkout: last ? last.d : null,
         lastSync: lastSyncOf(u, S),
@@ -2730,6 +2760,7 @@ const routes = {
     json(res, 200, {
       user: {
         id: u.id, name: u.name, created: u.created || null, disabled: !!u.disabled, admin: isAdmin(u), owner: isOwner(u), invitedBy: u.invitedBy || null,
+        trainer: isTrainer(u), trainerId: u.trainerId || null,
         // Only on an instance with password sign-in: whether they have one, and until when an
         // unused reset code is good.
         ...(PASSWORD_LOGIN ? { password: hasPassword(u), email: u.email || null, resetUntil: u.pwReset?.exp > Date.now() ? u.pwReset.exp : null } : {}),
@@ -2820,6 +2851,21 @@ const routes = {
     json(res, 200, { ok: true, id: u.id, admin: isAdmin(u) });
   },
 
+  // Appoint or remove a trainer. Any admin: running the people on the instance is what they do.
+  'POST /api/admin/user/trainer': async (req, res) => {
+    const admin = requireAdmin(req, res); if (!admin) return;
+    const body = await readBody(req);
+    const u = db.users.find(x => x.id === body.id);
+    if (!u) return json(res, 404, { error: 'no such user' });
+    if (typeof body.trainer !== 'boolean') return json(res, 400, { error: 'trainer must be true or false' });
+    if (body.trainer && u.disabled) return json(res, 400, { error: 'enable the account first' });
+    if (body.trainer) { u.trainer = true; delete u.trainerId; }
+    else { delete u.trainer; dropTrainerLinks(u.id); }
+    saveDb();
+    audit(req, body.trainer ? 'admin.trainer.grant' : 'admin.trainer.revoke', { user: admin, target: u });
+    json(res, 200, { ok: true, id: u.id, trainer: isTrainer(u) });
+  },
+
   // Hand the owner role to another admin. The old owner stays an admin.
   'POST /api/admin/owner': async (req, res) => {
     const owner = requireOwner(req, res); if (!owner) return;
@@ -2872,6 +2918,47 @@ const routes = {
     json(res, 200, { ok: true });
   },
 
+  /* ---------- trainer: their own clients and codes, nobody else's ---------- */
+  'GET /api/trainer/clients': async (req, res) => {
+    const trainer = requireTrainer(req, res); if (!trainer) return;
+    const clients = db.users.filter(u => u.trainerId === trainer.id).map(u => {
+      const workouts = records((readState(u.id) || {}).workouts);
+      const last = workouts[workouts.length - 1];
+      return { id: u.id, name: u.name, created: u.created || null, disabled: !!u.disabled, workouts: workouts.length, lastWorkout: last ? last.d : null };
+    });
+    json(res, 200, { clients });
+  },
+
+  'GET /api/trainer/invites': async (req, res) => {
+    const trainer = requireTrainer(req, res); if (!trainer) return;
+    json(res, 200, { invites: db.invites.filter(i => i.trainerId === trainer.id && !i.usedBy) });
+  },
+
+  'POST /api/trainer/invites/new': async (req, res) => {
+    const trainer = requireTrainer(req, res); if (!trainer) return;
+    const body = await readBody(req);
+    let code;
+    do { code = crypto.randomBytes(8).toString('hex').toUpperCase(); } while (db.invites.some(i => i.code === code));
+    const invite = { code, note: text(body.note).slice(0, 60), createdBy: trainer.id, trainerId: trainer.id, created: new Date().toISOString() };
+    db.invites.push(invite);
+    saveDb();
+    audit(req, 'trainer.invite.create', { user: trainer, msg: code });
+    json(res, 200, { invite });
+  },
+
+  'POST /api/trainer/invites/revoke': async (req, res) => {
+    const trainer = requireTrainer(req, res); if (!trainer) return;
+    const body = await readBody(req);
+    // Another trainer's code answers the same as no code at all.
+    const inv = db.invites.find(i => i.code === text(body.code).toUpperCase() && i.trainerId === trainer.id);
+    if (!inv) return json(res, 404, { error: 'no such code' });
+    if (inv.usedBy) return json(res, 400, { error: 'already used, cannot revoke' });
+    db.invites = db.invites.filter(i => i.code !== inv.code);
+    saveDb();
+    audit(req, 'trainer.invite.revoke', { user: trainer, msg: inv.code });
+    json(res, 200, { ok: true });
+  },
+
   /* ---------- activity log ---------- */
   // Newest first, paged by id. Not by offset: the log grows at the front of this view, so an
   // offset cursor would repeat a row whenever an event lands between two pages; and not by
@@ -2913,7 +3000,7 @@ const routes = {
   // Routes live in coach/routes.js and are handed the helpers above rather than importing
   // them: they are closures over db and SECRET, and passing them in keeps that module free of
   // a cycle. Every one of them is inert while the feature is unconfigured.
-  ...coachRoutes({ json, readBody, readSession, requireAdmin }),
+  ...coachRoutes({ json, readBody, readSession, requireAdmin, canUse: canUseAssistant }),
 
   /* ---------- photos & videos ---------- */
   // Absent, not refusing, when MEDIA_UPLOADS=0: a 404 is what a server from before the feature
@@ -2936,7 +3023,7 @@ coachJobs.setProposalHook((uid, pending) => {
     tag: 'coach-proposal', url: '#/coach'
   });
 });
-startCadence({ users: () => db.users.filter(u => !u.disabled), userNow, skip: uid => !stateSummary(uid)?.consent });
+startCadence({ users: () => db.users.filter(u => !u.disabled && canUseAssistant(u)), userNow, skip: uid => !stateSummary(uid)?.consent });
 startWarmup();
 
 // node's requestTimeout is one number for every route, and it is half an hour (below) for the

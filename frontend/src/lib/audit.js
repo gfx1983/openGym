@@ -68,6 +68,11 @@ const LABELS = {
   'admin.owner.transfer': 'Handed the owner role on',
   'admin.invite.create': 'Created an invite code',
   'admin.invite.revoke': 'Revoked an invite code',
+  'admin.trainer.grant': 'Made someone a trainer',
+  'admin.trainer.revoke': 'Removed someone as trainer',
+  'trainer.invite.create': 'A trainer created an invite code',
+  'trainer.invite.revoke': 'A trainer revoked an invite code',
+  'trainer.denied': 'Blocked from a trainer action',
   'admin.audit.clear': 'Cleared the activity log',
   // FIRST_USER_ADMIN=1: the first profile on a fresh instance is made admin as it signs up.
   'admin.first-user': 'Became admin as the first profile',

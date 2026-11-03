@@ -27,14 +27,15 @@ const USER_ERROR = {
 const hostOf = url => { try { return url ? new URL(url).host : null; } catch { return null; } };
 const HTTP_FOR = { off: 503, busy: 409, cap: 429, consent: 403, shared: 409, unprivileged: 503 };
 
-export function coachRoutes({ json, readBody, readSession, requireAdmin }) {
+export function coachRoutes({ json, readBody, readSession, requireAdmin, canUse = () => true }) {
   /** Every user route starts the same way: signed in, feature on, feature reachable. The class
    *  goes beside the words, as enqueue's refusal sends it: the app shows its own translated line
    *  for the class, and these English words only where it has none. */
   const guard = (req, res) => {
     const user = readSession(req);
     if (!user) { json(res, 401, { error: 'not signed in' }); return null; }
-    if (!cfgStore.isEnabled() || !cfgStore.isConnected()) { json(res, 503, { error: USER_ERROR.off, code: 'off' }); return null; }
+    // A profile the Assistant is not for is told what an instance without one tells everybody.
+    if (!canUse(user) || !cfgStore.isEnabled() || !cfgStore.isConnected()) { json(res, 503, { error: USER_ERROR.off, code: 'off' }); return null; }
     return user;
   };
   const failEnqueue = (res, e) => {
@@ -50,7 +51,9 @@ export function coachRoutes({ json, readBody, readSession, requireAdmin }) {
     // that reads it sits behind a session anyway, and on an invite-only instance which provider
     // this box is wired to is nobody's business who has not been let in.
     'GET /api/coach/disclosure': async (req, res) => {
-      if (!readSession(req)) return json(res, 401, { error: 'not signed in' });
+      const viewer = readSession(req);
+      if (!viewer) return json(res, 401, { error: 'not signed in' });
+      if (!canUse(viewer)) return json(res, 503, { error: USER_ERROR.off, code: 'off' });
       const cfg = cfgStore.load();
       json(res, 200, {
         provider: cfg.provider,
@@ -370,6 +373,7 @@ export function coachRoutes({ json, readBody, readSession, requireAdmin }) {
     'GET /api/coach/account': async (req, res) => {
       const user = readSession(req);
       if (!user) return json(res, 401, { error: 'not signed in' });
+      if (!canUse(user)) return json(res, 503, { error: USER_ERROR.off, code: 'off' });
       json(res, 200, cfgStore.accountFor(user.id));
     }
   };

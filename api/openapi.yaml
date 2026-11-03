@@ -2572,6 +2572,83 @@ paths:
         '401': { $ref: '#/components/responses/Unauthorized' }
         '403': { $ref: '#/components/responses/Forbidden' }
 
+  /api/admin/user/trainer:
+    post:
+      tags: [admin]
+      operationId: adminUserTrainer
+      summary: 'Appoint or remove a trainer'
+      description: >-
+        Any admin. Removing the role revokes the trainer's unused codes and unlinks their clients.
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [id, trainer]
+              properties:
+                id: { type: string, description: The user id. }
+                trainer: { type: boolean }
+      responses:
+        '200': { description: Changed. }
+        '400': { description: Bad input or a disabled account. }
+        '401': { description: Not signed in. }
+        '403': { description: Not an admin. }
+        '404': { description: No such user. }
+  /api/trainer/clients:
+    get:
+      tags: [admin]
+      operationId: trainerClients
+      summary: "The caller's own clients"
+      responses:
+        '200': { description: 'Name, sign-up date and workout summary of each client.' }
+        '401': { description: Not signed in. }
+        '403': { description: Not a trainer. }
+  /api/trainer/invites:
+    get:
+      tags: [admin]
+      operationId: trainerInvites
+      summary: "The caller's unused invite codes"
+      responses:
+        '200': { description: The codes. }
+        '401': { description: Not signed in. }
+        '403': { description: Not a trainer. }
+  /api/trainer/invites/new:
+    post:
+      tags: [admin]
+      operationId: trainerInviteNew
+      summary: 'Create a one-time code that signs someone up as a client of the caller'
+      requestBody:
+        content:
+          application/json:
+            schema:
+              type: object
+              properties:
+                note: { type: string, description: 'Up to 60 characters.' }
+      responses:
+        '200': { description: The new code. }
+        '401': { description: Not signed in. }
+        '403': { description: Not a trainer. }
+  /api/trainer/invites/revoke:
+    post:
+      tags: [admin]
+      operationId: trainerInviteRevoke
+      summary: "Revoke one of the caller's unused codes"
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [code]
+              properties:
+                code: { type: string }
+      responses:
+        '200': { description: Revoked. }
+        '400': { description: Already used. }
+        '401': { description: Not signed in. }
+        '403': { description: Not a trainer. }
+        '404': { description: "No such code among the caller's own." }
   /api/admin/invites/new:
     post:
       tags: [admin]
