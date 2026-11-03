@@ -3872,7 +3872,7 @@ main.api-main .lead { color: var(--fg-2); max-width: 58ch; margin: 14px 0 0; fon
     <span class="m post">POST</span>
     <span class="ep-path"><code>/api/account/trainer/plan/resolve</code><span class="ep-chip admin">admin</span></span>
     <span class="ep-chev" aria-hidden="true"></span>
-    <span class="ep-sum">Say what became of the plan the trainer sent: applied, declined or undone</span>
+    <span class="ep-sum">Say what became of the changes the trainer sent: applied or undone</span>
   </summary>
   <div class="ep-body">
 
@@ -3886,7 +3886,7 @@ main.api-main .lead { color: var(--fg-2); max-width: 58ch; margin: 14px 0 0; fon
   </div>
   <div class="prow">
     <span class="p-name">decision<em class="p-req" title="required">required</em></span>
-    <span class="p-type">&quot;applied&quot; | &quot;declined&quot; | &quot;undone&quot;</span>
+    <span class="p-type">&quot;applied&quot; | &quot;undone&quot;</span>
     <span class="p-desc"></span>
   </div>
 </div>
@@ -3917,7 +3917,7 @@ main.api-main .lead { color: var(--fg-2); max-width: 58ch; margin: 14px 0 0; fon
     <span class="m post">POST</span>
     <span class="ep-path"><code>/api/trainer/client/plan</code><span class="ep-chip admin">admin</span></span>
     <span class="ep-chev" aria-hidden="true"></span>
-    <span class="ep-sum">Send one of the caller's clients a plan to apply, replacing one still waiting</span>
+    <span class="ep-sum">Send changes to one of the caller's clients' plan, applied by their app when it opens</span>
   </summary>
   <div class="ep-body">
 
@@ -3932,17 +3932,32 @@ main.api-main .lead { color: var(--fg-2); max-width: 58ch; margin: 14px 0 0; fon
   <div class="prow">
     <span class="p-name">bundle<em class="p-req" title="required">required</em></span>
     <span class="p-type">object</span>
-    <span class="p-desc">The routines and week, as a plan file holds them.</span>
+    <span class="p-desc">The routines, week and programmes, as a plan file holds them.</span>
   </div>
   <div class="prow">
-    <span class="p-name">targets</span>
+    <span class="p-name">base</span>
     <span class="p-type">object</span>
-    <span class="p-desc">Which of the client's routines each sent routine replaces.</span>
+    <span class="p-desc">The same routines as the trainer started from, for the three-way merge.</span>
   </div>
   <div class="prow">
     <span class="p-name">removed</span>
     <span class="p-type">string[]</span>
     <span class="p-desc"></span>
+  </div>
+  <div class="prow">
+    <span class="p-name">removedProgrammes</span>
+    <span class="p-type">string[]</span>
+    <span class="p-desc"></span>
+  </div>
+  <div class="prow">
+    <span class="p-name">run</span>
+    <span class="p-type">object</span>
+    <span class="p-desc">Start a programme (<code>start</code>, its id) or end the running one (<code>end</code>).</span>
+  </div>
+  <div class="prow">
+    <span class="p-name">summary</span>
+    <span class="p-type">string[]</span>
+    <span class="p-desc">What changed, in words, for both sides to read.</span>
   </div>
   <div class="prow">
     <span class="p-name">schedule</span>
@@ -3986,7 +4001,7 @@ main.api-main .lead { color: var(--fg-2); max-width: 58ch; margin: 14px 0 0; fon
     <span class="m post">POST</span>
     <span class="ep-path"><code>/api/trainer/client/plan/withdraw</code><span class="ep-chip admin">admin</span></span>
     <span class="ep-chev" aria-hidden="true"></span>
-    <span class="ep-sum">Take back a plan the client has not decided on</span>
+    <span class="ep-sum">Take back changes the client has not received</span>
   </summary>
   <div class="ep-body">
 

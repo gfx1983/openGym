@@ -20,7 +20,7 @@ const mint = uid => {
   return payload + '.' + crypto.createHmac('sha256', SECRET).update(payload).digest('base64url');
 };
 
-async function startServer(t, env = {}) {
+async function startServer(t, env = {}, subs = []) {
   const dataDir = fs.mkdtempSync(path.join(os.tmpdir(), 'gym-trainer-'));
   const created = new Date().toISOString();
   fs.writeFileSync(path.join(dataDir, 'secret'), SECRET, { mode: 0o600 });
@@ -31,7 +31,7 @@ async function startServer(t, env = {}) {
       { id: OTHER, name: 'Other', created, trainer: true },
       { id: CLIENT, name: 'Client', created, trainerId: TRAINER },
       { id: PLAIN, name: 'Plain', created }
-    ], creds: [], subs: [], invites: []
+    ], creds: [], subs, invites: []
   }));
   fs.writeFileSync(path.join(dataDir, 'coach.json'), JSON.stringify({ enabled: true, provider: 'fixture' }));
   const { ASSISTANT_FOR_ALL, ...inherited } = process.env;
@@ -49,7 +49,7 @@ async function startServer(t, env = {}) {
     headers: { ...(uid ? { Cookie: `gymsid=${mint(uid)}` } : {}), ...(body ? { 'Content-Type': 'application/json' } : {}) },
     ...(body ? { body: JSON.stringify(body) } : {})
   });
-  return { dataDir, call, get: (url, uid) => call('GET', url, uid), post: (url, uid, body = {}) => call('POST', url, uid, body) };
+  return { dataDir, log: () => log, call, get: (url, uid) => call('GET', url, uid), post: (url, uid, body = {}) => call('POST', url, uid, body) };
 }
 
 const signUp = (h, name, code) => h.post('/api/register/password', null, { name, code, password: 'long enough to pass 17' });
@@ -224,10 +224,11 @@ test('a client sees who their trainer is and can leave, which ends the access at
 });
 
 const PLAN = { opengym_plan: 1, unit: 'kg', week: {}, routines: [{ id: 'tr', name: 'Push', ex: [{ id: 'squat', sets: 3, reps: 8 }] }], customEx: [] };
-const sendPlan = (h, uid = TRAINER, extra = {}) => h.post('/api/trainer/client/plan', uid, { id: CLIENT, bundle: PLAN, note: 'hi', ...extra });
+const SUMMARY = ['Новая программа: Push'];
+const sendPlan = (h, uid = TRAINER, extra = {}) => h.post('/api/trainer/client/plan', uid, { id: CLIENT, bundle: PLAN, summary: SUMMARY, note: 'hi', ...extra });
 const waiting = async h => (await (await h.get('/api/account/trainer', CLIENT)).json()).plan;
 
-test('a trainer can send only their own client a plan, and only a plan', async t => {
+test('a trainer can send only their own client changes, and only a plan', async t => {
   const h = await startServer(t);
   assert.equal((await sendPlan(h, OTHER)).status, 404, 'another trainer');
   assert.equal((await h.post('/api/trainer/client/plan', TRAINER, { id: PLAIN, bundle: PLAN })).status, 404, 'not a client');
@@ -239,42 +240,81 @@ test('a trainer can send only their own client a plan, and only a plan', async t
     assert.equal((await h.post('/api/trainer/client/plan', TRAINER, { id: CLIENT, bundle })).status, 400);
   }
   assert.equal((await h.post('/api/trainer/client/plan', TRAINER, { id: CLIENT, bundle: { opengym_plan: 1, routines: [] } })).status, 400, 'nothing to send');
-  assert.equal((await sendPlan(h, TRAINER, { removed: 'x' })).status, 400);
-  assert.equal((await sendPlan(h, TRAINER, { note: 'x'.repeat(300 * 1024) })).status, 400, 'too large');
+  for (const extra of [{ removed: 'x' }, { removedProgrammes: [1] }, { run: { start: 1 } }, { run: 'go' }, { base: [] }, { summary: 'x' }, { note: 'x'.repeat(300 * 1024) }]) {
+    assert.equal((await sendPlan(h, TRAINER, extra)).status, 400, JSON.stringify(extra).slice(0, 30));
+  }
   assert.equal(await waiting(h), null);
+  const onlyCycle = { opengym_plan: 1, routines: [], programmes: [{ id: 'p', name: 'Блок', weeks: [{}] }] };
+  assert.equal((await h.post('/api/trainer/client/plan', TRAINER, { id: CLIENT, bundle: onlyCycle })).status, 200, 'a programme alone is something to send');
 });
 
-test('a plan waits for the client, says what became of it, and never touches the state file', async t => {
+test('changes wait for the client\'s app, say what became of them, and never touch the state file', async t => {
   const h = await startServer(t);
-  const sent = await (await sendPlan(h)).json();
+  const run = { start: 'p' };
+  const sent = await (await sendPlan(h, TRAINER, { base: PLAN, run, removed: ['a'], removedProgrammes: ['b'], schedule: true })).json();
   assert.equal(sent.plan.status, 'pending');
   const plan = await waiting(h);
   assert.equal(plan.id, sent.plan.id);
   assert.equal(plan.note, 'hi');
   assert.deepEqual(plan.bundle, PLAN);
+  assert.deepEqual(plan.base, PLAN);
+  assert.deepEqual(plan.run, run);
+  assert.deepEqual(plan.removedProgrammes, ['b']);
+  assert.equal(plan.schedule, true);
   assert.equal((await (await h.get('/api/account/trainer', PLAIN)).json()).plan, null);
   const seen = await (await h.get(`/api/trainer/client?id=${CLIENT}`, TRAINER)).json();
   assert.equal(seen.plan.status, 'pending');
-  assert.deepEqual(seen.plan.routines, ['Push']);
+  assert.deepEqual(seen.plan.summary, SUMMARY);
   assert.equal(seen.plan.bundle, undefined);
   assert.deepEqual((await (await h.get('/api/data', CLIENT)).json()).routines ?? [], [], 'the server wrote nothing into the profile');
 
   const resolve = (decision, id = plan.id, uid = CLIENT) => h.post('/api/account/trainer/plan/resolve', uid, { id, decision });
   assert.equal((await resolve('maybe')).status, 400);
+  assert.equal((await resolve('declined')).status, 400, 'there is nothing to decline');
   assert.equal((await resolve('undone')).status, 409, 'nothing was applied yet');
   assert.equal((await resolve('applied', 'old id')).status, 409);
   assert.equal((await resolve('applied', plan.id, PLAIN)).status, 409, 'someone else cannot settle it');
   assert.equal((await resolve('applied', plan.id, null)).status, 401);
   assert.equal((await resolve('applied')).status, 200);
   assert.equal(await waiting(h), null);
-  assert.equal((await resolve('declined')).status, 409, 'settled once');
+  assert.equal((await resolve('applied')).status, 409, 'settled once');
   const after = await (await h.get(`/api/trainer/client?id=${CLIENT}`, TRAINER)).json();
   assert.equal(after.plan.status, 'applied');
   assert.ok(after.plan.resolvedAt);
+  assert.deepEqual(after.plan.summary, SUMMARY);
   assert.equal((await resolve('undone', 'old id')).status, 409);
   assert.equal((await resolve('undone')).status, 200);
   assert.equal((await (await h.get(`/api/trainer/client?id=${CLIENT}`, TRAINER)).json()).plan.status, 'undone');
   assert.equal((await resolve('undone')).status, 409, 'undone once');
+});
+
+test('the trainer reads what the plan screens need, and still nothing private', async t => {
+  const h = await startServer(t);
+  fs.writeFileSync(path.join(h.dataDir, `state-${CLIENT}.json`), JSON.stringify({
+    unit: 'kg', routines: [{ id: 'r1', name: 'Ноги', ex: [] }], week: {}, programmes: { p: { id: 'p', name: 'Блок', weeks: [{}] } },
+    programme: { id: 'p', startedOn: '2026-11-02' }, exWeights: { squat: { w: 70, d: '2026-11-01' } }, coach: { chat: [{ text: 'private chat' }] }, exNotes: { squat: 'private note' }
+  }));
+  const d = await (await h.get(`/api/trainer/client?id=${CLIENT}`, TRAINER)).json();
+  assert.equal(d.programmes.p.name, 'Блок');
+  assert.equal(d.programme.id, 'p');
+  assert.equal(d.exWeights.squat.w, 70);
+  const raw = JSON.stringify(d);
+  assert.equal(raw.includes('private chat'), false);
+  assert.equal(raw.includes('private note'), false);
+});
+
+test('sending tells the client\'s own devices and nobody else\'s', async t => {
+  // localhost is an address the push agent refuses, and the failure is logged with the account it
+  // was for: what proves a send was attempted, for whom, without a push service.
+  const keys = { p256dh: crypto.generateKeyPairSync('ec', { namedCurve: 'prime256v1' }).publicKey.export({ type: 'spki', format: 'der' }).subarray(-65).toString('base64url'), auth: crypto.randomBytes(16).toString('base64url') };
+  const subs = [CLIENT, PLAIN, TRAINER].map(userId => ({ userId, endpoint: `https://localhost/${userId}`, keys, created: new Date().toISOString() }));
+  const h = await startServer(t, {}, subs);
+  assert.equal((await sendPlan(h)).status, 200);
+  for (let i = 0; i < 100 && !h.log().includes('push send failed'); i++) await new Promise(r => setTimeout(r, 20));
+  assert.match(h.log(), new RegExp('push send failed ' + CLIENT));
+  assert.equal(h.log().includes('failed ' + PLAIN), false);
+  assert.equal(h.log().includes('failed ' + TRAINER), false);
+  assert.notEqual(await waiting(h), null, 'the plan waits whether or not a device could be told');
 });
 
 test('sending again replaces what waits, and a trainer can take it back', async t => {

@@ -81,7 +81,6 @@ const LABELS = {
   'trainer.plan.send': 'A trainer sent a client a plan',
   'trainer.plan.withdraw': 'A trainer withdrew a plan',
   'account.trainer.plan.applied': 'A client applied their trainer’s plan',
-  'account.trainer.plan.declined': 'A client declined their trainer’s plan',
   'account.trainer.plan.undone': 'A client undid their trainer’s plan',
   'admin.audit.clear': 'Cleared the activity log',
   // FIRST_USER_ADMIN=1: the first profile on a fresh instance is made admin as it signs up.

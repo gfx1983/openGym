@@ -3117,7 +3117,7 @@ paths:
     post:
       tags: [admin]
       operationId: accountTrainerPlanResolve
-      summary: 'Say what became of the plan the trainer sent: applied, declined or undone'
+      summary: 'Say what became of the changes the trainer sent: applied or undone'
       requestBody:
         required: true
         content:
@@ -3127,7 +3127,7 @@ paths:
               required: [id, decision]
               properties:
                 id: { type: string }
-                decision: { type: string, enum: [applied, declined, undone] }
+                decision: { type: string, enum: [applied, undone] }
       responses:
         '200': { description: Recorded. }
         '400': { description: Not a decision. }
@@ -3137,7 +3137,7 @@ paths:
     post:
       tags: [admin]
       operationId: trainerClientPlan
-      summary: "Send one of the caller's clients a plan to apply, replacing one still waiting"
+      summary: "Send changes to one of the caller's clients' plan, applied by their app when it opens"
       requestBody:
         required: true
         content:
@@ -3147,9 +3147,12 @@ paths:
               required: [id, bundle]
               properties:
                 id: { type: string }
-                bundle: { type: object, description: 'The routines and week, as a plan file holds them.' }
-                targets: { type: object, description: "Which of the client's routines each sent routine replaces.", additionalProperties: { type: string } }
+                bundle: { type: object, description: 'The routines, week and programmes, as a plan file holds them.' }
+                base: { type: object, description: 'The same routines as the trainer started from, for the three-way merge.' }
                 removed: { type: array, items: { type: string } }
+                removedProgrammes: { type: array, items: { type: string } }
+                run: { type: object, description: 'Start a programme (`start`, its id) or end the running one (`end`).' }
+                summary: { type: array, items: { type: string }, description: 'What changed, in words, for both sides to read.' }
                 schedule: { type: boolean, description: "Whether the bundle's week replaces the client's." }
                 note: { type: string }
       responses:
@@ -3162,7 +3165,7 @@ paths:
     post:
       tags: [admin]
       operationId: trainerClientPlanWithdraw
-      summary: 'Take back a plan the client has not decided on'
+      summary: 'Take back changes the client has not received'
       requestBody:
         required: true
         content:

@@ -1,186 +1,243 @@
-// A trainer's plan in a client's profile: it replaces in place, says no to what the schedule's owner
-// holds, comes back out with Undo, and survives the sync that follows.
+// A trainer's changes in a client's profile: what they did not touch stays as the client has it,
+// programmes travel and start, the schedule's owner is respected, Undo takes it all back, and the
+// sync that follows holds it.
 import { describe, it, expect } from 'vitest'
 import { EXIDX } from './exercises.js'
-import { applyTrainerPlan, buildTrainerPlan, copyClientRoutine, describeTrainerPlan, scheduleLocked, undoTrainerPlan } from './trainer-plan.js'
+import { addFromMyPlan, applyTrainerPlan, buildTrainerPlan, diffWorkspace, isEmptyDiff, loadClient, scheduleLocked, undoTrainerPlan } from './trainer-plan.js'
 import { mergeStates, stampEdits } from './sync-merge.js'
 
 const clone = v => JSON.parse(JSON.stringify(v))
-const [A, B] = Object.keys(EXIDX)
+const [A, B, C] = Object.keys(EXIDX)
 const T = 1_800_000_000_000
 const client = extra => ({
-  unit: 'kg', customEx: [], dayPlan: {}, workouts: [{ id: 'w1', routineId: 'mine', d: '2026-10-01' }],
-  routines: [{ id: 'mine', name: 'Мой день', emoji: '🏋️', ex: [{ id: A, sets: 3, reps: 8 }] }, { id: 'other', name: 'Второй', ex: [{ id: B, sets: 2, reps: 5 }] }],
-  week: { 1: ['mine'], 3: ['other'] }, ...extra
+  unit: 'kg', customEx: [], dayPlan: {}, programmes: {}, programme: null, rotation: null, queue: null, scheduleMode: null,
+  workouts: [{ id: 'w1', routineId: 'leg', d: '2026-10-01' }],
+  routines: [{ id: 'leg', name: 'Ноги', emoji: '🦵', ex: [{ id: A, sets: 3, reps: 8, weight: 60 }] }, { id: 'back', name: 'Спина', ex: [{ id: B, sets: 2, reps: 5, weight: 40 }] }],
+  week: { 1: ['leg'], 3: ['back'] }, ...extra
 })
-const trainer = extra => ({ unit: 'kg', customEx: [], routines: [{ id: 'tr', name: 'От тренера', emoji: '💪', ex: [{ id: B, sets: 4, reps: 6, weight: 100 }] }], week: {}, ...extra })
-const planFor = (opts = {}, S = trainer()) => {
-  const { id, ...body } = buildTrainerPlan(S, { client: 'c1', routineIds: S.routines.map(r => r.id), ...opts })
-  return { id: 'p1', ...body }
+// Works on a copy the way the trainer's screens do, and returns what would be sent.
+const edit = (base, mut, note) => {
+  const draft = clone(base)
+  mut(draft)
+  const { id, ...plan } = buildTrainerPlan(base, draft, 'c1', note)
+  return { id: 'p1', ...clone(plan) }
 }
+const leg = s => s.routines.find(r => r.id === 'leg')
 
-describe('applying a plan', () => {
-  it('adds a new routine, and a correction of it replaces it instead of adding a second', () => {
-    const s = client()
-    applyTrainerPlan(s, planFor(), 'T', 'Макс')
-    expect(s.routines.map(r => r.name)).toEqual(['Мой день', 'Второй', 'От тренера'])
-    const id = s.routines[2].id
-    const fixed = trainer(); fixed.routines[0].ex[0].sets = 5
-    applyTrainerPlan(s, { ...planFor({}, fixed), id: 'p2' }, 'T', 'Макс')
-    expect(s.routines).toHaveLength(3)
-    expect(s.routines[2].id).toBe(id)
-    expect(s.routines[2].ex[0].sets).toBe(5)
+describe('what counts as a change', () => {
+  it('nothing changed is nothing to send, whatever the sync stamped', () => {
+    const base = client()
+    const draft = clone(base)
+    draft.routines[0]._ts = 123
+    expect(isEmptyDiff(diffWorkspace(base, draft))).toBe(true)
   })
-
-  it('the same plan on a second device changes nothing and keeps the Undo of the first', () => {
-    const s = client()
-    const before = clone(s.routines)
-    applyTrainerPlan(s, planFor(), 'T', 'Макс')
-    const once = clone(s.routines)
-    applyTrainerPlan(s, planFor(), 'T', 'Макс')
-    expect(s.routines).toEqual(once)
-    expect(s.trainerUndo.routines).toEqual(before)
+  it('sends only what changed', () => {
+    const plan = edit(client(), s => { s.routines[0].ex[0].sets = 5 })
+    expect(plan.bundle.routines.map(r => r.id)).toEqual(['leg'])
+    expect(plan.schedule).toBe(false)
+    expect(plan.summary).toEqual(['Изменена программа: Ноги'])
   })
+})
 
-  it('replacing a client routine keeps its id, so the week and the history still point at it', () => {
+describe('applying', () => {
+  it('needs nobody to confirm: it changes the routine and keeps its id, week and history', () => {
     const s = client()
-    const S = trainer(); S.routines[0].clientCopy = { client: 'c1', routine: 'mine' }
-    applyTrainerPlan(s, planFor({}, S), 'T', 'Макс')
+    applyTrainerPlan(s, edit(client(), d => { d.routines[0].name = 'Ноги v2' }), 'Макс')
     expect(s.routines).toHaveLength(2)
-    expect(s.routines[0].id).toBe('mine')
-    expect(s.routines[0].name).toBe('От тренера')
-    expect(s.routines[0].clientCopy).toBeUndefined()
-    expect(s.week[1]).toEqual(['mine'])
-    expect(s.workouts[0].routineId).toBe('mine')
+    expect(leg(s).name).toBe('Ноги v2')
+    expect(s.week[1]).toEqual(['leg'])
+    expect(s.workouts[0].routineId).toBe('leg')
+    expect(s.trainerUndo.seen).toBe(false)
+    expect(s.trainerUndo.trainer).toBe('Макс')
   })
 
-  it('a copy made for another client replaces nothing here', () => {
+  it('a new routine keeps the id it got, so applying twice from two devices adds one', () => {
+    const plan = edit(client(), d => { d.routines.push({ id: 'new', name: 'Новая', ex: [{ id: B, sets: 1, reps: 1 }] }) })
     const s = client()
-    const S = trainer(); S.routines[0].clientCopy = { client: 'someone else', routine: 'mine' }
-    applyTrainerPlan(s, planFor({}, S), 'T', 'Макс')
+    applyTrainerPlan(s, plan, 'Макс')
+    const once = clone(s.routines)
+    const before = clone(s.trainerUndo.snapshot.routines)
+    applyTrainerPlan(s, plan, 'Макс')
+    expect(s.routines).toEqual(once)
     expect(s.routines).toHaveLength(3)
-    expect(s.routines[0].name).toBe('Мой день')
+    expect(s.trainerUndo.snapshot.routines).toEqual(before)
   })
 
-  it('a plan in kg reaches a client in lb converted', () => {
+  it('a weight the client moved while the trainer edited holds', () => {
+    const plan = edit(client(), d => { d.routines[0].ex[0].sets = 5 })
+    const s = client()
+    leg(s).ex[0].weight = 70
+    applyTrainerPlan(s, plan, 'Макс')
+    expect(leg(s).ex[0]).toMatchObject({ sets: 5, weight: 70 })
+  })
+
+  it('a weight the trainer changed wins over the client\'s', () => {
+    const plan = edit(client(), d => { d.routines[0].ex[0].weight = 80 })
+    const s = client()
+    leg(s).ex[0].weight = 70
+    applyTrainerPlan(s, plan, 'Макс')
+    expect(leg(s).ex[0].weight).toBe(80)
+  })
+
+  it('an exercise the client added meanwhile stays, one the trainer took out goes', () => {
+    const base = client()
+    base.routines[0].ex.push({ id: B, sets: 2, reps: 2 })
+    const plan = edit(base, d => { d.routines[0].ex = d.routines[0].ex.filter(e => e.id !== B) })
+    const s = clone(base)
+    leg(s).ex.push({ id: C, sets: 1, reps: 1 })
+    applyTrainerPlan(s, plan, 'Макс')
+    expect(leg(s).ex.map(e => e.id)).toEqual([A, C])
+  })
+
+  it('a plan in kg reaches a client who moved to lb converted, and the kept weight stays theirs', () => {
+    const plan = edit(client(), d => { d.routines[0].ex[0].weight = 100 })
     const s = client({ unit: 'lb' })
-    applyTrainerPlan(s, planFor(), 'T', 'Макс')
-    const weight = s.routines[2].ex[0].weight
-    expect(weight).toBeGreaterThan(200)
-    expect(weight).toBeLessThan(230)
+    applyTrainerPlan(s, plan, 'Макс')
+    expect(leg(s).ex[0].weight).toBeGreaterThan(200)
+    expect(leg(s).ex[0].weight).toBeLessThan(230)
   })
 
-  it('a running programme keeps its schedule, and the routines still arrive', () => {
-    const s = client({ programme: { id: 'x', startedOn: '2026-11-02' } })
-    const res = applyTrainerPlan(s, planFor({ week: { 5: ['tr'] } }), 'T', 'Макс')
-    expect(res.scheduleSkipped).toBe(true)
-    expect(s.week).toEqual({ 1: ['mine'], 3: ['other'] })
-    expect(s.routines).toHaveLength(3)
-    expect(scheduleLocked(s)).toBe(true)
-  })
-
-  it('the week replaces the whole week, mapped to the ids the routines ended up with', () => {
+  it('the week replaces the whole week; a rest day stays a rest day', () => {
+    const plan = edit(client(), d => { d.week = { 5: ['back'] } })
+    expect(plan.schedule).toBe(true)
     const s = client()
-    const res = applyTrainerPlan(s, planFor({ week: { 5: ['tr'], 2: ['other'], 6: ['gone'] } }), 'T', 'Макс')
-    expect(res.scheduleSkipped).toBe(false)
-    const added = s.routines[2].id
-    expect(s.week).toEqual({ 5: [added], 2: ['other'] })
+    applyTrainerPlan(s, plan, 'Макс')
+    expect(s.week).toEqual({ 5: ['back'] })
   })
 
   it('removes what it names, from the week too', () => {
+    const plan = edit(client(), d => { d.routines = d.routines.filter(r => r.id !== 'back'); delete d.week[3] })
     const s = client()
-    applyTrainerPlan(s, planFor({ removed: ['other'], routineIds: [] }), 'T', 'Макс')
-    expect(s.routines.map(r => r.id)).toEqual(['mine'])
-    expect(s.week).toEqual({ 1: ['mine'] })
+    applyTrainerPlan(s, plan, 'Макс')
+    expect(s.routines.map(r => r.id)).toEqual(['leg'])
+    expect(s.week).toEqual({ 1: ['leg'] })
   })
 
-  it('leaves out an exercise nobody knows, and brings a custom one along once', () => {
-    const custom = { id: 'cx', n: 'Своё', bp: 'chest', custom: true }
-    const S = trainer({ customEx: [custom] })
-    S.routines[0].ex = [{ id: 'cx', sets: 1, reps: 1 }, { id: 'no such exercise', sets: 1, reps: 1 }]
+  it('leaves out an exercise nobody knows', () => {
+    const plan = edit(client(), d => { d.routines[0].ex.push({ id: 'no such exercise', sets: 1, reps: 1 }) })
     const s = client()
-    applyTrainerPlan(s, planFor({}, S), 'T', 'Макс')
-    applyTrainerPlan(s, { ...planFor({}, S), id: 'p2' }, 'T', 'Макс')
-    expect(s.customEx).toHaveLength(1)
-    expect(s.routines[2].ex.map(e => e.id)).toEqual([s.customEx[0].id])
+    applyTrainerPlan(s, plan, 'Макс')
+    expect(leg(s).ex.map(e => e.id)).toEqual([A])
   })
 
   it('throws on what is not a plan, before touching anything', () => {
     const s = client()
     const before = clone(s)
-    expect(() => applyTrainerPlan(s, { id: 'x', bundle: { routines: 'nope' } }, 'T', 'Макс')).toThrow()
+    expect(() => applyTrainerPlan(s, { id: 'x', bundle: { routines: 'nope' } }, 'Макс')).toThrow()
     expect(s).toEqual(before)
   })
+})
 
-  it('Undo puts the routines and the week back, workouts aside, and is then gone', () => {
+describe('programmes', () => {
+  const P = { id: 'cyc', name: 'Силовой блок', at: 1, weeks: [{ rpe: 7 }, { rpe: 8 }, { deload: true }], days: { 2: ['leg'], 5: ['back'] } }
+
+  it('a new one arrives with its weeks, under its own id, over the client\'s routines', () => {
+    const plan = edit(client(), d => { d.programmes = { cyc: clone(P) } })
+    expect(plan.bundle.routines.map(r => r.id).sort()).toEqual(['back', 'leg'])
     const s = client()
-    const { routines, week, workouts } = clone(s)
-    applyTrainerPlan(s, planFor({ week: { 5: ['tr'] }, removed: ['other'] }), 'T', 'Макс')
-    expect(undoTrainerPlan(s)).toBe(true)
-    expect(s.routines).toEqual(routines)
-    expect(s.week).toEqual(week)
-    expect(s.workouts).toEqual(workouts)
+    leg(s).ex[0].weight = 70
+    applyTrainerPlan(s, plan, 'Макс')
+    expect(s.programmes.cyc.weeks).toHaveLength(3)
+    expect(s.programmes.cyc.days).toEqual(P.days)
+    expect(s.programme).toBe(null)
+    expect(s.routines).toHaveLength(2)
+    expect(leg(s).ex[0].weight).toBe(70)
+  })
+
+  it('started by the trainer, it starts for the client: their week goes into `saved` and comes back with Undo', () => {
+    const base = client()
+    const plan = edit(base, d => {
+      d.programmes = { cyc: clone(P) }
+      d.programme = { id: 'cyc', startedOn: '2026-11-02', cycle: 1, bump: 0 }
+      d.week = clone(P.days)
+    })
+    expect(plan.run).toEqual({ start: 'cyc' })
+    expect(plan.schedule).toBe(false)
+    const s = client()
+    applyTrainerPlan(s, plan, 'Макс', '2026-11-03')
+    expect(s.programme).toMatchObject({ id: 'cyc', startedOn: '2026-11-03' })
+    expect(s.week).toEqual(P.days)
+    expect(s.programme.saved.week).toEqual({ 1: ['leg'], 3: ['back'] })
+    undoTrainerPlan(s)
+    expect(s.programme).toBe(null)
+    expect(s.week).toEqual({ 1: ['leg'], 3: ['back'] })
+    expect(s.programmes).toEqual({})
+  })
+
+  it('a client\'s running programme keeps its schedule against a week sent without knowing', () => {
+    const plan = edit(client(), d => { d.week = { 5: ['back'] } })
+    const s = client({ programmes: { mine: clone(P) }, programme: { id: 'mine', startedOn: '2026-11-02' } })
+    applyTrainerPlan(s, plan, 'Макс')
+    expect(s.week).toEqual({ 1: ['leg'], 3: ['back'] })
+    expect(s.trainerUndo.scheduleSkipped).toBe(true)
+    expect(scheduleLocked(s)).toBe(true)
+  })
+
+  it('ending the client\'s programme and deleting one both travel', () => {
+    const base = client({ programmes: { cyc: clone(P) }, programme: { id: 'cyc', startedOn: '2026-11-02', saved: { week: { 6: ['leg'] }, rotation: null, scheduleMode: null } } })
+    const plan = edit(base, d => { d.programme = null; d.programmes = {} })
+    expect(plan.run).toEqual({ end: true })
+    expect(plan.removedProgrammes).toEqual(['cyc'])
+    const s = clone(base)
+    applyTrainerPlan(s, plan, 'Макс')
+    expect(s.programme).toBe(null)
+    expect(s.programmes.cyc).toBeUndefined()
+    expect(s.week).toEqual({ 6: ['leg'] })
+  })
+})
+
+describe('the trainer\'s workspace', () => {
+  const d = {
+    user: { id: 'c1' }, unit: 'lb', customEx: [], week: { 1: ['leg'] }, routines: client().routines, dayPlan: {}, programmes: {}, programme: null,
+    exWeights: {}, exUnit: {}, bodyweight: [], measurements: [], workouts: [{ id: 'new', d: '2026-11-02' }, { id: 'old', d: '2026-10-01' }],
+  }
+  it('shows the client\'s plan in the client\'s units, workouts oldest first, and none of the trainer\'s plan', () => {
+    const s = { unit: 'kg', routines: [{ id: 'mine', name: 'Моя' }], week: { 2: ['mine'] }, workouts: [], active: { id: 'a' }, trainerUndo: {} }
+    loadClient(s, d)
+    expect(s.routines.map(r => r.id)).toEqual(['leg', 'back'])
+    expect(s.unit).toBe('lb')
+    expect(s.workouts.map(w => w.id)).toEqual(['old', 'new'])
+    expect(s.active).toBe(null)
     expect(s.trainerUndo).toBeUndefined()
-    expect(undoTrainerPlan(s)).toBe(false)
   })
-})
-
-describe('what the card says', () => {
-  it('names what is replaced, what is new and what goes', () => {
-    const S = trainer({ routines: [
-      { id: 'a', name: 'Новая', ex: [{ id: A, sets: 1, reps: 1 }] },
-      { id: 'b', name: 'Правка', clientCopy: { client: 'c1', routine: 'mine' }, ex: [{ id: A, sets: 1, reps: 1 }] },
-    ] })
-    const about = describeTrainerPlan(client(), planFor({ removed: ['other'], week: { 1: ['a'] } }, S), 'T')
-    expect(about.routines.map(r => r.replaces)).toEqual([null, 'Мой день'])
-    expect(about.removed).toEqual(['Второй'])
-    expect(about.schedule).toBe(true)
-  })
-})
-
-describe('the trainer\'s copy', () => {
-  const d = { user: { id: 'c1' }, unit: 'lb', customEx: [], routines: [] }
-  const r = { id: 'mine', name: 'Его день', emoji: '🏋️', ex: [{ id: A, sets: 3, reps: 8, weight: 220 }] }
-  it('lands in their own units, marked as the client\'s, and opening it again adds no second copy', () => {
-    const s = trainer({ routines: [] })
-    const id = copyClientRoutine(s, d, r)
-    expect(s.routines[0].clientCopy).toEqual({ client: 'c1', routine: 'mine' })
-    expect(s.routines[0].ex[0].weight).toBeLessThan(110)
-    expect(copyClientRoutine(s, d, r)).toBe(id)
+  it('takes from the trainer\'s own plan a copy, in the client\'s units, leaving theirs alone', () => {
+    const real = { unit: 'kg', customEx: [], routines: [{ id: 'mine', name: 'Моя', ex: [{ id: A, sets: 3, reps: 5, weight: 100 }] }], programmes: { p: { id: 'p', name: 'Блок', at: 1, weeks: [{}, {}], days: { 1: ['mine'] } } } }
+    const frozen = clone(real)
+    const s = { unit: 'lb', routines: [], week: {}, customEx: [], programmes: {} }
+    addFromMyPlan(s, real, { programmeId: 'p' })
+    expect(real).toEqual(frozen)
     expect(s.routines).toHaveLength(1)
-  })
-  it('is sent back as a replacement of that routine, without the mark', () => {
-    const s = trainer({ routines: [] })
-    copyClientRoutine(s, d, r)
-    const body = buildTrainerPlan(s, { client: 'c1', routineIds: [s.routines[0].id] })
-    expect(body.targets).toEqual({ [s.routines[0].id]: 'mine' })
-    expect(JSON.stringify(body.bundle)).not.toContain('clientCopy')
-    expect(body.schedule).toBe(false)
-    expect(body.bundle.programmes ?? []).toEqual([])
+    expect(s.routines[0].id).not.toBe('mine')
+    expect(s.routines[0].ex[0].weight).toBeGreaterThan(200)
+    const [p] = Object.values(s.programmes)
+    expect(p.weeks).toHaveLength(2)
+    expect(p.days[1]).toEqual([s.routines[0].id])
   })
 })
 
 describe('through the sync', () => {
-  const edit = (prev, at, mut) => { const n = clone(prev); mut(n); n._ts = at; return stampEdits(prev, n, at) }
+  const change = (prev, at, mut) => { const n = clone(prev); mut(n); n._ts = at; return stampEdits(prev, n, at) }
   const start = () => stampEdits(null, { ...client(), _ts: T }, T)
 
-  it('an applied plan wins over a device that has not heard of it, in either order', () => {
+  it('applied changes win over a device that has not heard of them, in either order', () => {
     const s0 = start()
-    const phone = edit(s0, T + 10, s => { applyTrainerPlan(s, planFor(), 'T', 'Макс') })
-    const desk = edit(s0, T + 5, s => { s.bodyweight = [{ d: '2026-11-01', w: 80 }] })
+    const plan = edit(client(), d => { d.routines[0].name = 'Ноги v2' })
+    const phone = change(s0, T + 10, s => { applyTrainerPlan(s, plan, 'Макс') })
+    const desk = change(s0, T + 5, s => { s.bodyweight = [{ d: '2026-11-01', w: 80 }] })
     for (const m of [mergeStates(phone, desk), mergeStates(desk, phone)]) {
-      expect(m.routines.map(r => r.name)).toContain('От тренера')
+      expect(leg(m).name).toBe('Ноги v2')
       expect(m.trainerUndo.planId).toBe('p1')
     }
   })
 
   it('Undo brings a removed routine back through the merge with the device that saw it removed', () => {
     const s0 = start()
-    const applied = edit(s0, T + 10, s => { applyTrainerPlan(s, planFor({ removed: ['other'], routineIds: [] }), 'T', 'Макс') })
-    expect(applied.routines.map(r => r.id)).toEqual(['mine'])
-    const undone = edit(applied, T + 20, s => { undoTrainerPlan(s) })
+    const plan = edit(client(), d => { d.routines = d.routines.filter(r => r.id !== 'back'); delete d.week[3] })
+    const applied = change(s0, T + 10, s => { applyTrainerPlan(s, plan, 'Макс') })
+    expect(applied.routines.map(r => r.id)).toEqual(['leg'])
+    const undone = change(applied, T + 20, s => { undoTrainerPlan(s) })
     for (const m of [mergeStates(undone, applied), mergeStates(applied, undone)]) {
-      expect(m.routines.map(r => r.id).sort()).toEqual(['mine', 'other'])
+      expect(m.routines.map(r => r.id).sort()).toEqual(['back', 'leg'])
       expect(m.trainerUndo).toBeUndefined()
     }
   })

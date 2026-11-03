@@ -2,6 +2,7 @@ import { useEffect, useState } from 'react'
 import { useUI } from '../store/useUI.js'
 import { useStore } from '../store/useStore.js'
 import { undoAndTell } from '../lib/trainer-plan.js'
+import { enablePush, pushSupported, syncPushSubscription } from '../lib/push.js'
 import { api } from '../lib/api.js'
 import { confirmSheet } from '../sheets.jsx'
 import { Row } from './ui.jsx'
@@ -18,15 +19,17 @@ export default function MyTrainerRow() {
   const [trainer, setTrainer] = useState(null)
   const undo = useStore(s => s.S.trainerUndo)
   const update = useStore(s => s.update)
+  const [pushOn, setPushOn] = useState(null)
   useEffect(() => {
     const load = () => api('/api/account/trainer').then(d => setTrainer(d.trainer)).catch(() => {})
     load()
+    if (pushSupported()) syncPushSubscription().then(setPushOn).catch(() => {})
     changed.addEventListener('change', load)
     return () => changed.removeEventListener('change', load)
   }, [])
   // Undo stays after leaving the trainer: the plan they sent is still in the profile.
   const undoRow = undo && <Row icon="undo" iconTint="var(--indigo)" title="Вернуть программы как было"
-    subtitle={'До программы от ' + (undo.trainer || 'тренера') + '. Изменения в программах после неё тоже пропадут.'}
+    subtitle={'До изменений от ' + (undo.trainer || 'тренера') + '. Ваши правки после них тоже пропадут.'}
     onClick={() => confirmSheet({
       title: 'Вернуть как было?',
       message: 'Программы и расписание станут такими, как до применения. Тренировки останутся.',
@@ -36,7 +39,7 @@ export default function MyTrainerRow() {
   if (!trainer) return undoRow || null
   const unlink = () => confirmSheet({
     title: 'Отвязаться от тренера?',
-    message: trainer.name + ' больше не увидит ваши тренировки, вес, замеры и программы. Ваши данные останутся у вас. Вернуться можно только по новому коду.',
+    message: trainer.name + ' больше не увидит ваши тренировки, вес, замеры и программы и не сможет менять ваш план. Ваши данные останутся у вас. Вернуться можно только по новому коду.',
     confirmText: 'Отвязаться', danger: true,
     onConfirm: () => api('/api/account/trainer/unlink', { method: 'POST', body: '{}' })
       .then(() => { changed.dispatchEvent(new Event('change')); toast('Вы отвязались от тренера') })
@@ -44,7 +47,12 @@ export default function MyTrainerRow() {
   })
   return <>
     <Row icon="person" iconTint="var(--indigo)" title={'Мой тренер: ' + trainer.name}
-      subtitle="Видит ваши тренировки, вес, замеры и программы, присылает программы. Нажмите, чтобы отвязаться." onClick={unlink} />
+      subtitle="Видит ваши тренировки, вес, замеры и программы и может менять ваш план. Нажмите, чтобы отвязаться." onClick={unlink} />
+    {pushOn === false && <Row icon="bell" iconTint="var(--indigo)" title="Уведомлять о новых программах"
+      subtitle="Сообщение на телефон, когда тренер изменит ваш план."
+      onClick={() => enablePush().then(() => { setPushOn(true); toast('Уведомления включены') }).catch(e => toast(e.message))} />}
+    {!pushSupported() && <Row icon="bell" iconTint="var(--indigo)" title="Уведомления о новых программах"
+      subtitle="На iPhone работают только в приложении, добавленном на экран «Домой»." />}
     {undoRow}
   </>
 }

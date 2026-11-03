@@ -1351,26 +1351,33 @@ async function removeEmail(req, res, user, body) {
 
 // What a trainer sent a client, kept apart from the client's state file: the server never writes
 // that document, and the next sync could wipe what it did. One per client, in `db.trainerPlans`:
-// the client's own app applies it (lib/trainer-plan.js), which is also where it is sanitised. All
-// the server checks is that it is the right shape and a reasonable size.
+// the client's own app applies it unasked when it next opens (lib/trainer-plan.js), which is also
+// where it is sanitised. All the server checks is that it is the right shape and a reasonable size.
 const TRAINER_PLAN_MAX = 256 * 1024;
 const dropTrainerPlan = clientId => { if (db.trainerPlans) delete db.trainerPlans[clientId]; };
 const trainerPlanOf = clientId => (db.trainerPlans || {})[clientId] || null;
+const mapOf = v => (v && typeof v === 'object' && !Array.isArray(v) ? v : {});
 const isShortId = v => typeof v === 'string' && v.length > 0 && v.length <= 80;
+const isPlanFile = b => !!b && typeof b === 'object' && !Array.isArray(b) && !!b.opengym_plan && Array.isArray(b.routines);
 function trainerPlanError(body) {
   const b = body.bundle;
-  if (!b || typeof b !== 'object' || Array.isArray(b) || !b.opengym_plan || !Array.isArray(b.routines)) return 'bundle must be a plan';
+  if (!isPlanFile(b)) return 'bundle must be a plan';
   if (b.routines.length > 40) return 'too many routines';
-  const removed = body.removed === undefined ? [] : body.removed;
-  if (!Array.isArray(removed) || removed.length > 40 || !removed.every(isShortId)) return 'removed must be a list of routine ids';
-  const targets = body.targets === undefined ? {} : body.targets;
-  if (!targets || typeof targets !== 'object' || Array.isArray(targets) || !Object.values(targets).every(isShortId)) return 'targets must map routine ids';
-  if (!b.routines.length && !removed.length && !body.schedule) return 'nothing to send';
+  if (body.base !== undefined && !isPlanFile(body.base)) return 'base must be a plan';
+  for (const key of ['removed', 'removedProgrammes']) {
+    const list = body[key] === undefined ? [] : body[key];
+    if (!Array.isArray(list) || list.length > 40 || !list.every(isShortId)) return key + ' must be a list of ids';
+  }
+  const run = body.run;
+  if (run != null && !(typeof run === 'object' && (run.end === true || isShortId(run.start)))) return 'run must start or end a programme';
+  if (body.summary !== undefined && (!Array.isArray(body.summary) || body.summary.length > 60 || !body.summary.every(x => typeof x === 'string'))) return 'summary must be a list of lines';
+  const programmes = Array.isArray(b.programmes) ? b.programmes.length : 0;
+  if (!b.routines.length && !programmes && !body.removed?.length && !body.removedProgrammes?.length && !body.schedule && !run) return 'nothing to send';
   if (JSON.stringify(body).length > TRAINER_PLAN_MAX) return 'plan too large';
   return null;
 }
 // What a trainer sees of it: the whole plan while it waits, only the outcome after that.
-const trainerPlanStatus = p => p && { id: p.id, at: p.at, status: p.status, resolvedAt: p.resolvedAt || null, note: p.note, routines: p.routineNames };
+const trainerPlanStatus = p => p && { id: p.id, at: p.at, status: p.status, resolvedAt: p.resolvedAt || null, note: p.note, summary: p.summary };
 
 // A trainer who stops being one keeps nothing: their unused codes stop working and their clients
 // go back to being ordinary profiles, so granting the role again does not reopen old access.
@@ -3033,13 +3040,14 @@ const routes = {
       measurementEnabled: Array.isArray(S.measurementEnabled) ? S.measurementEnabled : undefined,
       customMeasurements: records(S.customMeasurements),
       workouts: records(S.workouts).reverse().map(({ media, ...w }) => w),
-      // A running programme or a rotation owns the schedule, so a week sent now would not take.
-      scheduleLocked: !!S.programme || S.scheduleMode === 'rotation' || (Array.isArray(S.queue) && S.queue.length > 0),
+      // What the plan screens need to show and edit the plan on the trainer's side.
+      dayPlan: mapOf(S.dayPlan), programmes: mapOf(S.programmes), programme: S.programme && typeof S.programme === 'object' ? S.programme : null, rotation: S.rotation || null,
+      queue: S.queue || null, scheduleMode: S.scheduleMode || null, exWeights: mapOf(S.exWeights), exUnit: mapOf(S.exUnit),
       plan: trainerPlanStatus(trainerPlanOf(u.id))
     });
   },
 
-  // Sending replaces whatever was waiting: the client has one decision to make, on the latest.
+  // Sending replaces whatever was waiting: what the client's app has not taken in yet is superseded.
   'POST /api/trainer/client/plan': async (req, res) => {
     const trainer = requireTrainer(req, res); if (!trainer) return;
     const body = await readBody(req);
@@ -3050,11 +3058,14 @@ const routes = {
     db.trainerPlans = db.trainerPlans || {};
     db.trainerPlans[u.id] = {
       id: crypto.randomBytes(9).toString('base64url'), at: new Date().toISOString(), status: 'pending',
-      note: text(body.note).slice(0, 500), bundle: body.bundle, targets: body.targets || {}, removed: body.removed || [],
-      schedule: !!body.schedule, routineNames: body.bundle.routines.map(r => text(r && r.name).slice(0, 80))
+      note: text(body.note).slice(0, 500), bundle: body.bundle, base: body.base || null, removed: body.removed || [],
+      removedProgrammes: body.removedProgrammes || [], run: body.run || null, schedule: !!body.schedule,
+      summary: (body.summary || []).map(line => line.slice(0, 120))
     };
     saveDb();
     audit(req, 'trainer.plan.send', { user: trainer, target: u });
+    // Only to a device that asked for notifications. The plan itself waits for the app to open.
+    sendPush(u.id, { title: 'Новая программа', body: trainer.name + ' обновил(а) вашу программу', tag: 'trainer-plan' }).catch(() => {});
     json(res, 200, { ok: true, plan: trainerPlanStatus(db.trainerPlans[u.id]) });
   },
 
@@ -3080,22 +3091,25 @@ const routes = {
     const plan = trainer ? trainerPlanOf(user.id) : null;
     json(res, 200, {
       trainer: trainer ? { id: trainer.id, name: trainer.name } : null,
-      plan: plan && plan.status === 'pending' ? { id: plan.id, at: plan.at, note: plan.note, bundle: plan.bundle, targets: plan.targets, removed: plan.removed, schedule: plan.schedule } : null
+      plan: plan && plan.status === 'pending' ? {
+        id: plan.id, at: plan.at, note: plan.note, summary: plan.summary, bundle: plan.bundle, base: plan.base,
+        removed: plan.removed, removedProgrammes: plan.removedProgrammes, run: plan.run, schedule: plan.schedule
+      } : null
     });
   },
 
-  // The app has already applied it, or not: this only says so. An id that is not the waiting plan
+  // The app has already applied it, or undone it: this only says so. An id that is not the waiting plan
   // (withdrawn, replaced, settled on another device) changes nothing.
   'POST /api/account/trainer/plan/resolve': async (req, res) => {
     const user = readSession(req);
     if (!user) return json(res, 401, { error: 'not signed in' });
     const body = await readBody(req);
-    if (!['applied', 'declined', 'undone'].includes(body.decision)) return json(res, 400, { error: 'decision must be applied, declined or undone' });
+    if (!['applied', 'undone'].includes(body.decision)) return json(res, 400, { error: 'decision must be applied or undone' });
     const plan = trainerPlanOf(user.id);
     // Undone is the one thing that follows a decision: the trainer should not go on believing it holds.
     const from = body.decision === 'undone' ? 'applied' : 'pending';
     if (!plan || plan.status !== from || plan.id !== body.id) return json(res, 409, { error: 'this plan is no longer waiting', code: 'stale' });
-    db.trainerPlans[user.id] = { id: plan.id, at: plan.at, note: plan.note, routineNames: plan.routineNames, status: body.decision, resolvedAt: new Date().toISOString() };
+    db.trainerPlans[user.id] = { id: plan.id, at: plan.at, note: plan.note, summary: plan.summary, status: body.decision, resolvedAt: new Date().toISOString() };
     saveDb();
     audit(req, 'account.trainer.plan.' + body.decision, { user });
     json(res, 200, { ok: true });
