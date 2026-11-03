@@ -1,4 +1,4 @@
-import { useEffect, useState } from 'react'
+import { useEffect, useRef, useState } from 'react'
 import { useNavigate } from 'react-router-dom'
 import { useStore } from '../store/useStore.js'
 import { useUI } from '../store/useUI.js'
@@ -71,11 +71,16 @@ export default function TrainerWorkspaceBar() {
   const openSheet = useUI(s => s.openSheet)
   const toast = useUI(s => s.toast)
   const shown = !!client && sandbox
-  // The bar sits over every screen, so the screens start below it.
+  // The bar sits over every screen, so the screens start below it, however tall a phone's notch
+  // and a wrapped row of buttons make it.
+  const bar = useRef(null)
   useEffect(() => {
-    if (!shown) return
-    document.body.style.paddingTop = '56px'
-    return () => { document.body.style.paddingTop = '' }
+    if (!shown || !bar.current) return
+    const fit = () => { document.body.style.paddingTop = bar.current.offsetHeight + 'px' }
+    fit()
+    const seen = new ResizeObserver(fit)
+    seen.observe(bar.current)
+    return () => { seen.disconnect(); document.body.style.paddingTop = '' }
   }, [shown])
   if (!shown) return null
   const home = '/trainer/client/' + encodeURIComponent(client.user.id)
@@ -87,11 +92,11 @@ export default function TrainerWorkspaceBar() {
     confirmText: 'Выйти', danger: true, onConfirm: out,
   }))
   const send = () => openSheet(close => <SendSheet client={client} base={base} close={close} onSent={() => { toast('Отправлено'); out() }} />)
-  return <div role="region" aria-label="План клиента" style={{
+  return <div ref={bar} role="region" aria-label="План клиента" style={{
     position: 'fixed', insetInline: 0, top: 0, zIndex: 40, padding: 'calc(env(safe-area-inset-top) + 8px) 16px 8px',
     background: 'var(--surface-2)', borderBottom: '2px solid var(--indigo)', display: 'flex', flexWrap: 'wrap', alignItems: 'center', gap: 8,
   }}>
-    <div className="small" style={{ flex: '1 1 140px', minWidth: 0, fontWeight: 600 }}>План клиента: {client.user.name}</div>
+    <div className="small" style={{ flex: '1 1 100%', minWidth: 0, fontWeight: 600 }}>План клиента: {client.user.name}</div>
     <Button size="sm" onClick={() => openSheet(close => <MyPlanSheet real={real} close={close} />)}>Из моего плана</Button>
     <Button size="sm" onClick={leave}>Выйти</Button>
     <Button size="sm" variant="primary" disabled={empty} onClick={send}>Отправить</Button>

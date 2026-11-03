@@ -7,8 +7,9 @@
 //
 // Applying is a three-way merge against what the trainer started from: what the trainer did not
 // touch stays as the client has it now. A weight the client moved while the trainer was editing
-// holds, unless the trainer changed that same weight. Ids are kept, so the week and the history
-// still point at the routine, and applying twice from two devices ends in the same place.
+// holds, unless the trainer changed that same weight, and then `weightSetAt` makes the next session
+// open at it (lib/session-start.js). Ids are kept, so the week and the history still point at the
+// routine, and applying twice from two devices ends in the same place.
 import { api } from './api.js'
 import { todayISO } from './format.js'
 import { buildPlanBundle, mergePlan, parsePlan } from './plan-share.js'
@@ -35,6 +36,8 @@ export function loadClient(s, d) {
     queue: clone(d.queue) ?? null, scheduleMode: d.scheduleMode ?? null, exWeights: clone(d.exWeights) || {}, exUnit: clone(d.exUnit) || {},
     // The server sends the newest first, the app keeps them oldest first.
     workouts: clone(d.workouts).reverse(), bodyweight: clone(d.bodyweight), measurements: clone(d.measurements), active: null,
+    // The Assistant answers under the trainer's account: it has no business with a client's data.
+    modules: { ...(isMap(s.modules) ? s.modules : {}), coach: false },
   })
   delete s.trainerUndo
 }
@@ -121,9 +124,10 @@ function mergeRoutine(base, fresh, current) {
   const ex = []
   for (const [k, e] of fk) {
     const was = bk.get(k), now = ck.get(k)
-    if (now) ex.push(mergeFields(was, e, now))
+    const set = e.weight > 0 && !same(e.weight, was?.weight) ? { weightSetAt: Date.now() } : {}
+    if (now) ex.push({ ...mergeFields(was, e, now), ...set })
     // Gone from the client's since, and the trainer did not touch it: gone it stays.
-    else if (!was || !same(was, e)) ex.push(e)
+    else if (!was || !same(was, e)) ex.push({ ...e, ...set })
   }
   // Added by the client since: the trainer never saw it to take it out.
   for (const [k, e] of ck) if (!bk.has(k) && !fk.has(k)) ex.push(e)

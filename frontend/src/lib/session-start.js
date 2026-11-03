@@ -85,6 +85,8 @@ function carriedWarmups(st, cfg, routine, noProg) {
   return rows.every(fits) ? rows : null
 }
 
+const trainedSince = (st, exId, at) => (st.workouts || []).some(w => (w.end || w.start || 0) > at && (w.entries || []).some(e => e.id === exId))
+
 /**
  * One planned exercise, built the way a session builds it: the prescription, the rows it opens
  * with and the target it is judged against. The session start, a mid-session edit of the
@@ -105,6 +107,12 @@ function planEntry(stored, cfg, routine, { noProg = false } = {}) {
   const st = historyAs(stored, cfg.id, meaning)
   // `plan` is kept on the entry purely so the workout can explain the number it chose.
   let plan = noProg ? { policy: 'off', kind: 'off' } : nextPrescription(st, cfg, routine)
+  // A weight the trainer set (lib/trainer-plan.js) opens the next session whatever the policy would
+  // have said: a policy reads history and ignores a routine's weight changed on its own. It lasts
+  // until that session is logged, and the history then takes over from the new weight.
+  if (!noProg && cfg.weightSetAt && cfg.weight > 0 && !trainedSince(st, cfg.id, cfg.weightSetAt)) {
+    plan = { ...plan, kind: 'hold', weight: cfg.weight, why: ['Вес задал тренер'] }
+  }
   // The warm-up ramp and the prescription snap to the exercise's own increment (1.25 kg
   // plates exist), not the unit default; a timed exercise's `inc` is seconds, so it keeps the
   // default for its optional load.

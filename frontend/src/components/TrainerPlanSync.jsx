@@ -3,8 +3,9 @@ import { useStore } from '../store/useStore.js'
 import { applyWaitingPlan } from '../lib/trainer-plan.js'
 
 // A client's app takes in what the trainer sent as soon as it can: at the start, on coming back to
-// the foreground, and every few minutes while it is on screen. Someone without a trainer is asked
-// once per start and left alone.
+// the foreground, and every few minutes while it is on screen, but not in the middle of a workout:
+// unlocking the phone between sets must not rewrite what is being trained. Someone without a
+// trainer is asked once per start and left alone.
 const EVERY = 5 * 60 * 1000
 
 export default function TrainerPlanSync() {
@@ -14,7 +15,8 @@ export default function TrainerPlanSync() {
     if (!ready || !userId) return
     let busy = false, hasTrainer = true, timer
     const check = async () => {
-      if (busy || !hasTrainer || document.hidden || useStore.getState().tourSandbox) return
+      const st = useStore.getState()
+      if (busy || !hasTrainer || document.hidden || st.tourSandbox || st.S.active) return
       busy = true
       try { hasTrainer = (await applyWaitingPlan(useStore)).trainer !== false }
       catch (e) { console.error('trainer plan', e) }
