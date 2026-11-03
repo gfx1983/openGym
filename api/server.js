@@ -172,7 +172,7 @@ const isOwner = user => !!user && isAdmin(user) && user.id === ownerId();
 const isTrainer = user => !!user && user.trainer === true;
 // The built-in Assistant (`coach` in the code) is for the people running the place, not for their
 // clients. Closed by default, so an instance that forgets the setting does not hand it out;
-// ASSISTANT_FOR_ALL=1 restores the upstream behaviour, and the upstream tests run under it.
+// ASSISTANT_FOR_ALL=1 restores the upstream behaviour.
 const ASSISTANT_FOR_ALL = /^(1|true|yes|on)$/i.test(process.env.ASSISTANT_FOR_ALL || '');
 const canUseAssistant = user => ASSISTANT_FOR_ALL || isAdmin(user) || isTrainer(user);
 // 0600: db.json holds passkey credential material. It used to be covered by a blanket 0700 on
