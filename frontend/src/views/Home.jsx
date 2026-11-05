@@ -1,6 +1,7 @@
-import { useMemo, useState } from 'react'
+import { useEffect, useMemo, useState } from 'react'
 import { useNavigate } from 'react-router-dom'
 import { useStore } from '../store/useStore.js'
+import { api } from '../lib/api.js'
 import { effectiveRoutines, effectiveRoutineIds, nextTrainingDay, lastBW, setsDoneActive } from '../lib/history.js'
 import { streakInfo } from '../lib/streak.js'
 import { StreakFlame, StreakMeta, StreakParty } from '../components/Streak.jsx'
@@ -32,11 +33,27 @@ import RecoveryHint from '../components/RecoveryHint.jsx'
 import { ChallengesCard } from '../components/Challenges.jsx'
 import { isOn } from '../lib/modules.js'
 
+// The trainer's name for a profile with no plan yet: undefined until known, null when there is none
+// (or the server cannot say), so the card under it never flashes the wrong offer.
+function useTrainerOfNewProfile(asked, userId) {
+  const [name, setName] = useState(undefined)
+  useEffect(() => {
+    if (!asked) return
+    if (!userId) { setName(null); return }
+    let gone = false
+    api('/api/account/trainer').then(d => { if (!gone) setName(d?.trainer?.name || null) }).catch(() => { if (!gone) setName(null) })
+    return () => { gone = true }
+  }, [asked, userId])
+  return name
+}
+
 // Home = what to do now + a quick glance. Deep charts & history live in Stats.
 export default function Home() {
   const nav = useNavigate()
   const S = useStore(s => s.S)
   const user = useStore(s => s.user)
+  const noPlan = !S.routines.length && !S.active
+  const trainerName = useTrainerOfNewProfile(noPlan, user?.id)
   // The banner switched off and the sync stuck: a dot on the gear (Settings → Show connection status).
   const trouble = useConnectionTrouble()
   const [weekOffset, setWeekOffset] = useState(0)
@@ -218,7 +235,12 @@ export default function Home() {
       </div>
     )}
 
-    {!S.routines.length && !S.active && (
+    {noPlan && trainerName && (
+      <div className="card">
+        <CardHead icon="calendar" title={`Ваш тренер ${trainerName} готовит программу`} sub="Когда она будет готова, то появится здесь сама." />
+      </div>
+    )}
+    {noPlan && trainerName === null && (
       <div className="card">
         <CardHead icon="calendar" title={t('Welcome!')} sub={t('Set up your weekly routine to get going, or grab a ready-made starter plan.')} />
         <Button variant="primary" icon="clipboard" onClick={starterPlanSheet}>{t('Load starter plan')}</Button>

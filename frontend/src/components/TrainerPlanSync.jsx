@@ -1,6 +1,7 @@
 import { useEffect } from 'react'
 import { useStore } from '../store/useStore.js'
-import { applyWaitingPlan } from '../lib/trainer-plan.js'
+import { api } from '../lib/api.js'
+import { applyWaitingPlan, wantsClientModules, setClientModules } from '../lib/trainer-plan.js'
 
 // A client's app takes in what the trainer sent as soon as it can: at the start, on coming back to
 // the foreground, and every few minutes while it is on screen, but not in the middle of a workout:
@@ -27,5 +28,16 @@ export default function TrainerPlanSync() {
     document.addEventListener('visibilitychange', check)
     return () => { clearInterval(timer); document.removeEventListener('visibilitychange', check) }
   }, [ready, userId])
+  // Only once the account's own copy is here: choices made on another device must decide first.
+  const synced = useStore(s => s.sync?.status === 'ok' && s.sync.lastSynced > 0)
+  useEffect(() => {
+    if (!ready || !userId || !synced || !wantsClientModules(useStore.getState().S)) return
+    let gone = false
+    api('/api/account/trainer').then(d => {
+      const st = useStore.getState()
+      if (!gone && d?.trainer && !st.tourSandbox && wantsClientModules(st.S)) st.update(setClientModules)
+    }).catch(e => console.error('client modules', e))
+    return () => { gone = true }
+  }, [ready, userId, synced])
   return null
 }

@@ -3,8 +3,9 @@
 // sync that follows holds it.
 import { describe, it, expect } from 'vitest'
 import { EXIDX } from './exercises.js'
-import { addFromMyPlan, applyTrainerPlan, buildTrainerPlan, diffWorkspace, isEmptyDiff, loadClient, scheduleLocked, undoTrainerPlan } from './trainer-plan.js'
+import { addFromMyPlan, applyTrainerPlan, buildTrainerPlan, diffWorkspace, isEmptyDiff, loadClient, scheduleLocked, setClientModules, undoTrainerPlan, wantsClientModules } from './trainer-plan.js'
 import { mergeStates, stampEdits } from './sync-merge.js'
+import { presetOf } from './modules.js'
 
 const clone = v => JSON.parse(JSON.stringify(v))
 const [A, B, C] = Object.keys(EXIDX)
@@ -239,6 +240,25 @@ describe('through the sync', () => {
     for (const m of [mergeStates(undone, applied), mergeStates(applied, undone)]) {
       expect(m.routines.map(r => r.id).sort()).toEqual(['back', 'leg'])
       expect(m.trainerUndo).toBeUndefined()
+    }
+  })
+})
+
+describe('a new client\'s modules', () => {
+  it('sets training and body on a profile that has chosen nothing and logged nothing', () => {
+    const s = { workouts: [] }
+    expect(wantsClientModules(s)).toBe(true)
+    setClientModules(s)
+    expect(presetOf(s)).toBe('body')
+    expect(s.modules.coach).toBe(false)
+    expect(wantsClientModules(s)).toBe(false)
+  })
+
+  it('leaves alone a profile with a choice, a history or a session under way', () => {
+    for (const s of [{ workouts: [], modules: { body: false } }, { workouts: [{ id: 'w' }] }, { workouts: [], active: { id: 'a' } }]) {
+      const before = JSON.stringify(s)
+      setClientModules(s)
+      expect(JSON.stringify(s)).toBe(before)
     }
   })
 })

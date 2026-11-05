@@ -36,7 +36,7 @@ import { installChipDrag } from './lib/hchips.js'
 import { syncPushSubscription } from './lib/push.js'
 import { MOBILE, nativePlatform } from './lib/mobile.js'
 import { isOn } from './lib/modules.js'
-import { useTour, tourState, openTour, readTour, shouldOffer, resumeAt } from './lib/tour.js'
+import { useTour, tourState, openTour, readTour, resumeAt } from './lib/tour.js'
 import { exitWorkoutEdit, startFlow, beginWorkout, bwSheet } from './sheets.jsx'
 import Icon from './components/Icon.jsx'
 import TabBar from './components/TabBar.jsx'
@@ -315,11 +315,9 @@ function Shell() {
     const tm = setTimeout(() => {
       const st = useStore.getState()
       if (tourAsked.current || tourState() || st.S.active || useUI.getState().sheets.length || /^#\/workout/.test(window.location.hash || '')) return
-      const rec = readTour()
-      const at = resumeAt(rec)
-      const synced = !st.user || (st.sync?.status === 'ok' && st.sync.lastSynced > 0)
+      // No first-run question on this fork: a new profile goes straight to Home. The tour is in Settings.
+      const at = resumeAt(readTour())
       if (at) openTour({ kind: 'resume', at })
-      else if (shouldOffer(rec, st.S, { synced })) openTour({ kind: 'offer' })
       else return
       tourAsked.current = true
     }, 1200)

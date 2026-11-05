@@ -16,6 +16,7 @@ import { buildPlanBundle, mergePlan, parsePlan } from './plan-share.js'
 import { deleteProgramme, endProgramme, importedProgramme, programmeRoutineIds, startProgramme, programmeById } from './programmes.js'
 import { deleteRoutine } from './routines.js'
 import { scheduleModeOf } from './rotation.js'
+import { applyPreset } from './modules.js'
 
 const clone = v => (v === undefined ? undefined : JSON.parse(JSON.stringify(v)))
 const same = (a, b) => JSON.stringify(a ?? null) === JSON.stringify(b ?? null)
@@ -201,6 +202,16 @@ export function undoTrainerPlan(s) {
 export function undoAndTell(update, undo) {
   update(undoTrainerPlan)
   if (undo?.planId) api('/api/account/trainer/plan/resolve', { method: 'POST', body: JSON.stringify({ id: undo.planId, decision: 'undone' }) }).catch(() => {})
+}
+
+/**
+ * A new client starts with training and body, no question asked. Only a profile that has chosen no
+ * modules and logged nothing: applyPreset writes every key, so this happens once, and what the
+ * client changes in Settings afterwards stays.
+ */
+export const wantsClientModules = S => !!S && !S.active && !(S.workouts || []).length && !Object.keys(isMap(S.modules) ? S.modules : {}).length
+export function setClientModules(s) {
+  if (wantsClientModules(s)) applyPreset(s, 'body')
 }
 
 /** The client's side: whatever is waiting goes in. True when something did. */

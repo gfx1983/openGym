@@ -67,6 +67,11 @@ export default function ModulesPage() {
   const update = useStore(s => s.update)
   const conn = useConnections()
   const preset = presetOf(S)
+  // A signed-in answer always has the key; null means the server keeps the Assistant from this
+  // profile (a trainer's client), so there is nothing here for its switch to turn on.
+  const config = useStore(s => s.config)
+  const signedIn = useStore(s => !!s.user)
+  const closed = id => id === 'coach' && signedIn && !!config && 'coach' in config && !config.coach
 
   // Applies a change, after one question when it pauses something that is connected.
   const change = (next, title, apply) => {
@@ -103,7 +108,7 @@ export default function ModulesPage() {
     </Section>
     {GROUPS.map((g, gi) => <Section key={g.id} title={gc[g.id]}
       footer={gi === GROUPS.length - 1 ? t('Logging, plans, history, the exercise library and the basic stats are always on.') : null}>
-      {MODULES.filter(m => m.group === g.id).map(m => (
+      {MODULES.filter(m => m.group === g.id && !closed(m.id)).map(m => (
         <Row key={m.id} icon={m.icon} iconTint={m.tint} title={mc[m.id][0]} subtitle={mc[m.id][1]} className="module-row" tour={'module-' + m.id}>
           <Switch aria-label={mc[m.id][0]} checked={isOn(S, m.id)} onChange={v => flip(m.id, v)} />
         </Row>

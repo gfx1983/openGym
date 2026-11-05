@@ -87,6 +87,17 @@ describe('the Modules page', () => {
     expect(isOn(mocks.S, 'effort')).toBe(true)
   })
 
+  it('has no Assistant switch for a profile the server keeps it from, and keeps it otherwise', () => {
+    mocks.user = { id: 'client' }
+    mocks.config = { coach: null }
+    mount()
+    expect(row('AI Coach')).toBeUndefined()
+    expect(row('Body')).toBeTruthy()
+    mocks.config = { coach: { enabled: true } }
+    mount()
+    expect(row('AI Coach')).toBeTruthy()
+  })
+
   it('asks once before switching off a module that is connected, and pauses on yes', () => {
     mocks.coachLocal = { mode: 'byok' }
     mount()
