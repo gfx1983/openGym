@@ -1,19 +1,51 @@
 import { useEffect, useState } from 'react'
 import { useNavigate } from 'react-router-dom'
 import { useUI } from '../store/useUI.js'
+import { useStore } from '../store/useStore.js'
 import { api } from '../lib/api.js'
 import { fmtDate } from '../lib/format.js'
 import { confirmSheet } from '../sheets.jsx'
 import Icon from '../components/Icon.jsx'
 import { Button } from '../components/ui.jsx'
+import { passwordError, looksLikeEmail } from '../components/PasswordAuth.jsx'
 import '../admin.css'
 
 // The trainer's page: their own clients and the codes that sign new ones up. The server answers
 // about the caller's own clients only. Russian-only for now: this fork serves one Russian-speaking
 // group, so the strings stay out of the 19 language packs, which keeps merges from upstream clean.
 
+// Only where the server can send letters: the code then goes straight to the person.
+function SendInvite({ reload }) {
+  const toast = useUI(s => s.toast)
+  const [email, setEmail] = useState('')
+  const [busy, setBusy] = useState(false)
+  const [err, setErr] = useState(null)
+  const submit = async ev => {
+    ev.preventDefault()
+    if (busy) return
+    const to = email.trim()
+    if (!looksLikeEmail(to)) { setErr('Укажите адрес электронной почты.'); return }
+    setBusy(true); setErr(null)
+    try {
+      await api('/api/trainer/invites/send', { method: 'POST', body: JSON.stringify({ email: to }) })
+      toast('Приглашение отправлено на ' + to)
+      setEmail('')
+      reload()
+    } catch (e) { setErr(passwordError(e)) }
+    finally { setBusy(false) }
+  }
+  return <form onSubmit={submit} noValidate style={{ marginBottom: 12 }}>
+    <input className="input" type="email" autoComplete="off" inputMode="email" autoCapitalize="none" spellCheck={false} maxLength={254}
+      placeholder="Адрес клиента" aria-label="Адрес клиента" value={email} onChange={e => setEmail(e.target.value)} />
+    {err && <div className="small" role="alert" style={{ color: 'var(--red)', marginTop: 6 }}>{err}</div>}
+    <div style={{ height: 8 }} />
+    <Button type="submit" variant="primary" disabled={busy}>Отправить приглашение</Button>
+  </form>
+}
+
 function InvitesCard({ invites, reload }) {
   const toast = useUI(s => s.toast)
+  const emailAuth = !!useStore(s => s.config)?.email_auth
   const gen = () => api('/api/trainer/invites/new', { method: 'POST', body: '{}' })
     .then(({ invite }) => { navigator.clipboard?.writeText(invite.code).catch(() => {}); toast('Код ' + invite.code + ' создан и скопирован'); reload() })
     .catch(e => toast(e.message))
@@ -29,8 +61,12 @@ function InvitesCard({ invites, reload }) {
     <div className="row between"><h2 style={{ margin: 0 }}>Коды приглашения</h2>
       <Button variant="primary" size="sm" onClick={gen} icon="plus">Новый код</Button></div>
     <div className="adm-lead">Человек, который зарегистрируется по такому коду, станет вашим клиентом. Каждый код работает один раз.</div>
+    {emailAuth && <SendInvite reload={reload} />}
     {invites?.length ? invites.map(i => <div key={i.code} className="row between" style={{ padding: '6px 0', borderBottom: 'var(--hair) solid var(--sep)' }}>
-      <button className="adm-code" onClick={() => copy(i.code)} aria-label={'Скопировать ' + i.code}>{i.code}</button>
+      <div style={{ minWidth: 0 }}>
+        <button className="adm-code" onClick={() => copy(i.code)} aria-label={'Скопировать ' + i.code}>{i.code}</button>
+        {i.sentTo && <div className="dim small" style={{ overflowWrap: 'anywhere' }}>Отправлен: {i.sentTo}</div>}
+      </div>
       <div className="row" style={{ gap: 4 }}>
         <button className="iconbtn adm-iconbtn" onClick={() => copy(i.code)} aria-label="Скопировать"><Icon name="copy" /></button>
         <button className="iconbtn adm-iconbtn" style={{ color: 'var(--red)' }} onClick={() => revoke(i.code)} aria-label="Отозвать"><Icon name="trash" /></button>

@@ -28,6 +28,7 @@ import {
   listPasskeys, addPasskeyRecord, renamePasskeyRecord, removePasskeyRecord, passkeyRemovalRefused, MAX_PASSKEYS,
   transportsOf,
 } from './passkeys-store.js';
+import { sendMail, letterFor, inviteLetter, EMAIL_TOKEN_TTL_MS } from './mail.js';
 import { createDeviceLink, findDeviceLink, burnDeviceLink, dropDeviceLinks, recoveryLinkOf, RECOVERY_TTL_MS } from './device-link.js';
 import {
   createWatchCode, takeWatchCode, dropWatchCodes, createWatchLink, findWatchLink, touchWatchLink, listWatchLinks,
@@ -79,6 +80,14 @@ const ALLOW_GUEST = !/^(0|false|no|off)$/i.test(process.env.ALLOW_GUEST || '');
 // every account that opts in, so an instance has to ask for it. While it is off every password
 // route answers 404 and the app shows none of it; hashes already stored stay where they are.
 const PASSWORD_LOGIN = /^(1|true|yes|on)$/i.test(process.env.PASSWORD_LOGIN || '');
+// Sign-up by e-mail and password, with the address confirmed by a letter (see "sign-in letters"
+// below). Off without PASSWORD_LOGIN or without what a letter needs, so that a half-configured
+// server never takes a sign-up it cannot finish.
+const RESEND_API_KEY = process.env.RESEND_API_KEY || '';
+const EMAIL_FROM = process.env.EMAIL_FROM || '';
+const EMAIL_AUTH_ASKED = /^(1|true|yes|on)$/i.test(process.env.EMAIL_AUTH || '');
+const EMAIL_AUTH = EMAIL_AUTH_ASKED && PASSWORD_LOGIN && !!RESEND_API_KEY && !!EMAIL_FROM;
+if (EMAIL_AUTH_ASKED && !EMAIL_AUTH) console.warn('EMAIL_AUTH is on, but it needs PASSWORD_LOGIN, RESEND_API_KEY and EMAIL_FROM: it stays off');
 // The language the sign-in screen, and every profile that never picked one, starts in (#303) —
 // for an instance whose people share a language. Only a tag's shape is checked here; the app
 // matches it against the languages it has and ignores one it does not know. Unset, it is left
@@ -157,6 +166,7 @@ db.users = db.users || [];
 db.creds = db.creds || [];
 db.subs = db.subs || [];
 db.invites = db.invites || [];
+db.emailTokens = db.emailTokens || [];
 db.deviceLinks = db.deviceLinks || [];   // unused one-time device links, hashed (device-link.js)
 const isAdmin = user => !!user && (user.admin === true || ADMIN_UIDS.includes(user.id));
 // One owner per instance, any number of admins. Admins run the place day to day (users, invites,
@@ -714,6 +724,7 @@ const PASSKEY_ROUTES = new Set([
 // device code in the body is the credential, never a Bearer.
 const SIGN_IN_ROUTES = new Set([
   'POST /api/login/password', 'POST /api/register/password', 'POST /api/login/password-reset',
+  'POST /api/login/forgot', 'POST /api/login/forgot/confirm', 'POST /api/email/verify', 'POST /api/email/resend',
   'POST /api/device-link/options', 'POST /api/device-link/verify'
 ]);
 // A verify error as the answer's body: a passkey made at an address that is not ORIGIN/RP_ID gets
@@ -1045,19 +1056,27 @@ if (AUDIT_ON) {
 // the whole instance: one client can pause *password* sign-in for everybody for a while, and the
 // per-name pause is what still protects each password.
 const AUTH_BURST = createWindow({ max: 60, windowMs: 60000 });
+// Letters asked for without a session, per address and per account they would go to.
+const MAIL_ADDR = createWindow({ max: 10, windowMs: 15 * 60000 });
+const MAIL_TARGET = createWindow({ max: 3, windowMs: 15 * 60000 });
+// Invitations a trainer sends: this goes to addresses nobody has proven, so it is limited per trainer too.
+const MAIL_TRAINER = createWindow({ max: 20, windowMs: 3600000 });
 const ADDR_FAILS = createBackoff({ free: 20, baseMs: 30000, maxMs: 15 * 60000, forgetMs: 3600000 });
 const ACCOUNT_FAILS = createBackoff({
   free: 5, baseMs: 60000, maxMs: 3600000, forgetMs: 24 * 3600000,
   // At most one per profile with a password, so this cannot grow without bound.
   keep: k => k.startsWith('acct:') && hasPassword(db.users.find(u => u.id === k.slice(5)))
 });
-setInterval(() => { AUTH_BURST.sweep(); ADDR_FAILS.sweep(); ACCOUNT_FAILS.sweep(); }, 60000).unref();
+setInterval(() => { AUTH_BURST.sweep(); ADDR_FAILS.sweep(); ACCOUNT_FAILS.sweep(); MAIL_ADDR.sweep(); MAIL_TARGET.sweep(); MAIL_TRAINER.sweep(); }, 60000).unref();
 
 // Route -> the kind of failure it can count. Every route listed here also spends the burst
 // budget; `null` spends only that.
 const THROTTLED = {
   'POST /api/login/password': 'password', 'POST /api/login/password-reset': 'password',
   'POST /api/register/password': 'signup',
+  // A letter costs more than an answer: mailBudget below has its own, smaller count for those.
+  'POST /api/login/forgot': null, 'POST /api/email/resend': null,
+  'POST /api/login/forgot/confirm': 'password', 'POST /api/email/verify': 'password',
   'POST /api/account/password': 'password', 'DELETE /api/account/password': null,
   // Setting an e-mail only spends the budget and asks the address's e-mail pause; an address
   // already in use counts against it (see POST /api/account/email).
@@ -1161,10 +1180,11 @@ const nameTaken = (name, exceptId) => {
 
 /* ---------- e-mail as a sign-in name ----------
    Optional, per profile, and only while PASSWORD_LOGIN is on: an address someone may type at the
-   password sign-in instead of their profile name. Nothing is ever sent to it — no verification,
-   no reset mail; resets stay the admin's one-time code — so the address is never proven to be
-   theirs, and it does not need to be: it is only an identifier that points at an account, and the
-   password is still what opens it. Stored as `u.email`, folded by normalizeEmail() (password.js).
+   password sign-in instead of their profile name. With EMAIL_AUTH off nothing is ever sent to it,
+   so the address is never proven to be theirs, and it does not need to be: it is only an
+   identifier that points at an account, and the password is still what opens it. With EMAIL_AUTH
+   on letters do go to it: see "sign-in letters" below. Stored as `u.email`, folded by
+   normalizeEmail() (password.js).
 
    It is unique across every profile, and no profile's address may be another password-holding
    profile's name (nameTaken above says the same the other way round), so an identifier never
@@ -1207,6 +1227,77 @@ function loginTarget(body) {
   return { k, user, resolve, email: k.includes('@'), key: user ? acctKey(user) : 'id:' + k };
 }
 const acctKey = u => 'acct:' + u.id;
+
+/* ---------- sign-in letters (EMAIL_AUTH) ----------
+   A new profile needs an address and a password, and cannot sign in until a letter has proven the
+   address: `u.pendingSince` marks it, and it is the only thing the sign-in looks at, so a profile
+   from before this feature (no such mark) signs in as it always did, by name or passkey. Passkey
+   sign-up is refused on the server, not only hidden: it would make a profile with no address.
+   Someone who wants a passkey adds it in Settings once signed in.
+
+   `u.emailProven` holds the address a letter reached. It is compared with `u.email`, not kept as
+   a flag, so an address changed any other way is not proven by an old letter. A reset letter goes
+   only to a proven address or to a profile still waiting for its first letter (the link proves
+   that one as it is used), so nobody receives another's reset by typing their address in Settings.
+   A new address in Settings stays in its token until the letter is answered, and `u.email` holds
+   the old one until then.
+
+   Asking for a reset changes nothing: unlike the admin's code, which ends the old password at
+   once, this one is open to anyone who knows an address, so the old password keeps working until
+   the link is used. The routes that take an address answer the same whoever holds it, and send
+   after answering, so neither the words nor the time tell whether an account is there. A token is
+   32 random bytes, kept only as a hash, one per account and kind, single use.
+
+   A profile whose letter was never answered holds a name, an address and an invite code, so it is
+   removed after PENDING_TTL_MS and the code works again. It has no training data: it has never
+   signed in. One with a passkey (an admin's recovery code) is left alone. */
+const PENDING_TTL_MS = 7 * 86400000;
+const emailIsProven = u => !!u.email && u.emailProven === u.email;
+const hashEmailToken = token => crypto.createHash('sha256').update(token).digest('hex');
+const emailHolderForLetter = e => db.users.find(u => u.email === e && !u.disabled && (emailIsProven(u) || u.pendingSince)) || null;
+function dropEmailTokens(uid, ...kinds) {
+  db.emailTokens = db.emailTokens.filter(x => x.uid !== uid || (kinds.length > 0 && !kinds.includes(x.kind)));
+}
+function issueEmailToken(user, kind, email) {
+  dropEmailTokens(user.id, kind);
+  const token = crypto.randomBytes(32).toString('base64url');
+  db.emailTokens.push({ h: hashEmailToken(token), kind, uid: user.id, email, exp: Date.now() + EMAIL_TOKEN_TTL_MS[kind] });
+  return token;
+}
+function findEmailToken(raw, ...kinds) {
+  const token = typeof raw === 'string' ? raw.slice(0, 100) : '';
+  if (!token) return null;
+  const h = hashEmailToken(token);
+  const row = db.emailTokens.find(x => x.h === h && kinds.includes(x.kind) && x.exp > Date.now());
+  const user = row && db.users.find(u => u.id === row.uid);
+  return user ? { row, user } : null;
+}
+const sendLetter = (kind, to, token) => sendMail({ apiKey: RESEND_API_KEY, from: EMAIL_FROM, to, ...letterFor(kind, ORIGIN, token) });
+// After the answer has gone: a failure is the log's business, and waiting would tell who has an
+// account by how long the answer took.
+function sendLetterLater(kind, to, token) {
+  sendLetter(kind, to, token).catch(e => console.error('mail: could not send', kind, '-', e.message));
+}
+// Whether this caller may ask for one more letter. Over the address's budget it answers 429.
+function mailBudget(req, res) {
+  const wait = MAIL_ADDR.take('mail|' + limitAddress(req));
+  if (wait) tooMany(res, wait);
+  return !wait;
+}
+function releasePending(user) {
+  const inv = db.invites.find(i => i.usedBy === user.id);
+  if (inv) { delete inv.usedBy; delete inv.usedAt; }
+  dropEmailTokens(user.id);
+  removeAccount(user);
+}
+function sweepEmailAuth() {
+  const now = Date.now();
+  const before = db.emailTokens.length;
+  db.emailTokens = db.emailTokens.filter(x => x.exp > now);
+  const stale = db.users.filter(u => u.pendingSince && now - Date.parse(u.pendingSince) > PENDING_TTL_MS && passkeyCount(u) === 0);
+  for (const u of stale) releasePending(u);
+  if (db.emailTokens.length !== before && !stale.length) saveDb();
+}
 const passkeyCount = u => db.creds.filter(c => c.userId === u.id).length;
 const publicUser = u => ({ id: u.id, name: u.name, admin: isAdmin(u), ...(isOwner(u) ? { owner: true } : {}), ...(isTrainer(u) ? { trainer: true } : {}) });
 const POLICY_ERRORS = {
@@ -1227,6 +1318,7 @@ function setPassword(user, h) {
   user.sv = sessionVersion(user) + 1;
   for (const [k, v] of pairings) if (v.uid === user.id) pairings.delete(k);
   dropDeviceLinks(db, user.id);
+  dropEmailTokens(user.id, 'reset');
 }
 
 // A passkey assertion made just now by the signed-in account itself — how someone who has no
@@ -1339,11 +1431,17 @@ if (PASSWORD_LOGIN) warmUp();
 // Taking the address away: the profile then signs in by its name only. Asks the same proof as
 // setting one; a profile without an address gets 200 with none asked.
 async function removeEmail(req, res, user, body) {
-  if (!user.email) return json(res, 200, { ok: true, email: null });
+  if (!user.email) {
+    // Nothing to remove, but a new address may still be waiting for its letter: this calls it off.
+    if (db.emailTokens.some(x => x.uid === user.id && x.kind === 'change')) { dropEmailTokens(user.id, 'change'); saveDb(); }
+    return json(res, 200, { ok: true, email: null });
+  }
   const proof = await proveOwner(req, res, user, body, 'email-remove');
   if (!proof) return;
   if (readSession(req) !== user) return json(res, 401, { error: 'not signed in' });
   delete user.email;
+  delete user.emailProven;
+  dropEmailTokens(user.id);
   saveDb();
   audit(req, 'auth.email.remove', { user, msg: proof });
   json(res, 200, { ok: true, email: null });
@@ -1439,6 +1537,12 @@ const passwordRoutes = {
       audit(req, 'auth.password.fail', { ok: false, user, msg: 'account-disabled' });
       return json(res, 403, { error: 'this account has been disabled', code: 'disabled' });
     }
+    // Only after the password was right, so this answer tells nothing to someone who guesses.
+    if (EMAIL_AUTH && user.pendingSince) {
+      check.ok();
+      audit(req, 'auth.password.fail', { ok: false, user, msg: 'email-unverified' });
+      return json(res, 403, { error: 'confirm your e-mail address first', code: 'email-unverified' });
+    }
     check.ok();
     // A hash made with older parameters is replaced now, while the password is at hand.
     if (needsRehash(rec.h)) {
@@ -1484,6 +1588,7 @@ const passwordRoutes = {
     const hasEmail = typeof body.email === 'string' && body.email.trim() !== '';
     const email = hasEmail ? normalizeEmail(body.email) : null;
     if (hasEmail && !email) return json(res, 400, EMAIL_ERRORS.invalid);
+    if (EMAIL_AUTH && !email) return json(res, 400, { error: 'an e-mail address is required', code: 'email-required' });
     const emailRefused = () => {
       strikeAddress(req, 'email');
       audit(req, 'auth.register.fail', { ok: false, name, msg: 'email-taken' });
@@ -1507,12 +1612,26 @@ const passwordRoutes = {
     // No await from here to the push: nothing can take the address between this check and it.
     if (email && emailTaken(email)) return emailRefused();
     const created = new Date().toISOString();
-    const user = { id: crypto.randomBytes(12).toString('base64url'), name, created, pw: { h, set: created }, ...(email ? { email } : {}) };
-    if (inv) { user.invitedBy = inv.code; inv.usedBy = user.id; inv.usedAt = created; if (inv.trainerId) user.trainerId = inv.trainerId; }
+    const user = { id: crypto.randomBytes(12).toString('base64url'), name, created, pw: { h, set: created }, ...(email ? { email } : {}), ...(EMAIL_AUTH ? { pendingSince: created } : {}) };
+    if (inv) { user.invitedBy = inv.code; inv.usedBy = user.id; inv.usedAt = created; delete inv.sentTo; if (inv.trainerId) user.trainerId = inv.trainerId; }
     claimFirstAdmin(req, user);
     db.users.push(user);
     saveDb();
     audit(req, 'auth.register.ok', { user, msg: inv ? inv.code + ' · password' : 'password' });
+    if (EMAIL_AUTH) {
+      // No session: the letter opens the way in. If it cannot go, nothing stays behind, so the
+      // same name, address and code work on the next try.
+      const token = issueEmailToken(user, 'verify', email);
+      saveDb();
+      try { await sendLetter('verify', email, token); }
+      catch (e) {
+        console.error('mail: could not send verify -', e.message);
+        if (db.users.includes(user)) releasePending(user);
+        audit(req, 'auth.register.fail', { ok: false, msg: 'mail-failed' });
+        return json(res, 502, { error: 'the letter could not be sent, try again later', code: 'mail-failed' });
+      }
+      return json(res, 200, { needsVerification: true });
+    }
     json(res, 200, { user: publicUser(user) }, { 'Set-Cookie': sessionCookie(user) });
   },
 
@@ -1524,7 +1643,11 @@ const passwordRoutes = {
       set: hasPassword(user), setAt: user.pw?.set || null, passkeys: passkeyCount(user),
       name: user.name, nameTaken: nameTaken(user.name, user.id),
       // Only the owner's own session is ever handed their address.
-      email: user.email || null
+      email: user.email || null,
+      ...(EMAIL_AUTH ? {
+        email_auth: true, emailProven: emailIsProven(user),
+        emailPending: db.emailTokens.find(x => x.uid === user.id && x.kind === 'change' && x.exp > Date.now())?.email || null
+      } : {})
     });
   },
 
@@ -1597,7 +1720,7 @@ const passwordRoutes = {
     if (body.email == null || (typeof body.email === 'string' && body.email.trim() === '')) return removeEmail(req, res, user, body);
     const email = normalizeEmail(body.email);
     if (!email) return json(res, 400, EMAIL_ERRORS.invalid);
-    if (email === user.email) return json(res, 200, { ok: true, email });
+    if (email === user.email && (!EMAIL_AUTH || emailIsProven(user))) return json(res, 200, { ok: true, email });
     const acct = 'email|' + acctKey(user);
     const paused = () => {
       const wait = ADDR_FAILS.retryAfter(acct);
@@ -1615,6 +1738,22 @@ const passwordRoutes = {
       ADDR_FAILS.fail(acct);
       audit(req, 'auth.email.fail', { ok: false, user, msg: 'email-taken' });
       return json(res, 409, EMAIL_ERRORS.taken);
+    }
+    if (EMAIL_AUTH) {
+      // The address stays in the token until the letter is answered (see "sign-in letters").
+      const wait = MAIL_TARGET.take(user.id);
+      if (wait) return tooMany(res, wait);
+      const token = issueEmailToken(user, 'change', email);
+      saveDb();
+      try { await sendLetter('change', email, token); }
+      catch (e) {
+        console.error('mail: could not send change -', e.message);
+        dropEmailTokens(user.id, 'change');
+        saveDb();
+        return json(res, 502, { error: 'the letter could not be sent, try again later', code: 'mail-failed' });
+      }
+      audit(req, 'auth.email.change', { user, msg: proof + ' · letter · ' + maskEmail(email) });
+      return json(res, 200, { ok: true, email: user.email || null, pending: email });
     }
     const first = !user.email;
     user.email = email;
@@ -1691,6 +1830,103 @@ const passwordRoutes = {
     json(res, 200, { user: publicUser(user) }, { 'Set-Cookie': sessionCookie(user) });
   }
 };
+
+const emailRoutes = {
+  // Answers the same whether or not the address has an account (see "sign-in letters").
+  'POST /api/login/forgot': async (req, res) => {
+    const body = await readBody(req);
+    const email = normalizeEmail(text(body.email));
+    if (!email) return json(res, 400, EMAIL_ERRORS.invalid);
+    if (!mailBudget(req, res)) return;
+    const user = emailHolderForLetter(email);
+    json(res, 200, { ok: true });
+    if (!user || MAIL_TARGET.take(user.id)) return;
+    const token = issueEmailToken(user, 'reset', email);
+    saveDb();
+    audit(req, 'auth.password.forgot', { user });
+    sendLetterLater('reset', email, token);
+  },
+
+  // A new password for whoever holds the letter. It ends every session and every other way this
+  // account was being reached, and does not start one: the link usually opens in a browser that
+  // is not the installed app, so the person goes back there and signs in.
+  'POST /api/login/forgot/confirm': async (req, res) => {
+    const body = await readBody(req);
+    if (addressPaused(req, res, 'password')) return;
+    const invalid = () => json(res, 400, { error: 'that link is wrong or has expired', code: 'email-token-invalid' });
+    const find = () => {
+      const found = findEmailToken(body.token, 'reset');
+      return found && found.row.email === found.user.email ? found : null;
+    };
+    const found = find();
+    if (!found) {
+      strikeAddress(req, 'password');
+      audit(req, 'auth.password.reset', { ok: false, msg: 'email-token-invalid' });
+      return invalid();
+    }
+    const { user } = found;
+    if (user.disabled) return json(res, 403, { error: 'this account has been disabled', code: 'disabled' });
+    const problem = passwordProblem(body.next, user.name);
+    if (problem) return policyError(res, problem);
+    const taken = () => json(res, 409, { error: 'another profile already signs in with this name', code: 'name-taken' });
+    if (nameTaken(user.name, user.id)) return taken();
+    const h = await hashPassword(body.next);
+    // Single use: a second request that raced this one through the hash finds the token gone.
+    if (find()?.user !== user) return invalid();
+    if (nameTaken(user.name, user.id)) return taken();
+    setPassword(user, h);
+    user.emailProven = user.email;
+    delete user.pendingSince;
+    dropEmailTokens(user.id, 'verify');
+    ACCOUNT_FAILS.clear(acctKey(user));
+    saveDb();
+    audit(req, 'auth.password.reset', { user, msg: 'letter' });
+    json(res, 200, { ok: true });
+  },
+
+  // The link in a confirmation letter, for a new profile and for a new address in Settings alike.
+  'POST /api/email/verify': async (req, res) => {
+    const body = await readBody(req);
+    if (addressPaused(req, res, 'password')) return;
+    const found = findEmailToken(body.token, 'verify', 'change');
+    if (!found) {
+      strikeAddress(req, 'password');
+      audit(req, 'auth.email.verify', { ok: false, msg: 'email-token-invalid' });
+      return json(res, 400, { error: 'that link is wrong or has expired', code: 'email-token-invalid' });
+    }
+    const { row, user } = found;
+    if (user.disabled) return json(res, 403, { error: 'this account has been disabled', code: 'disabled' });
+    // Taken since the letter went: another profile proved it first.
+    if (emailTaken(row.email, user.id)) {
+      dropEmailTokens(user.id, row.kind);
+      saveDb();
+      return json(res, 409, EMAIL_ERRORS.taken);
+    }
+    user.email = row.email;
+    user.emailProven = row.email;
+    delete user.pendingSince;
+    dropEmailTokens(user.id);
+    saveDb();
+    audit(req, 'auth.email.verify', { user, msg: maskEmail(row.email) });
+    json(res, 200, { ok: true });
+  },
+
+  // The confirmation letter again, for a profile still waiting for its first one.
+  'POST /api/email/resend': async (req, res) => {
+    const body = await readBody(req);
+    const email = normalizeEmail(text(body.email));
+    if (!email) return json(res, 400, EMAIL_ERRORS.invalid);
+    if (!mailBudget(req, res)) return;
+    const user = db.users.find(u => u.email === email && u.pendingSince && !u.disabled);
+    json(res, 200, { ok: true });
+    if (!user || MAIL_TARGET.take(user.id)) return;
+    const token = issueEmailToken(user, 'verify', email);
+    saveDb();
+    sendLetterLater('verify', email, token);
+  }
+};
+// On the next tick: removing an account reaches state set up further down this file.
+if (EMAIL_AUTH) { setImmediate(sweepEmailAuth); setInterval(sweepEmailAuth, 3600000).unref(); }
 
 /* ---------- more than one passkey, and one-time device links (#95) ---------- */
 // A passkey lives where it was made — Windows Hello on one PC, one phone's keychain, one security
@@ -2164,6 +2400,7 @@ const routes = {
       invite_only: INVITE_ONLY, allow_guest: ALLOW_GUEST,
       // Only when on, so an instance without passwords answers exactly as it did before (#118).
       ...(PASSWORD_LOGIN ? { password_login: true } : {}),
+      ...(EMAIL_AUTH ? { email_auth: true } : {}),
       // Public: the sign-in screen is the first thing that reads it.
       ...(DEFAULT_LANG ? { default_lang: DEFAULT_LANG } : {}),
       // Public like the two flags above: the caps are not a secret, and the absence of the
@@ -2195,6 +2432,7 @@ const routes = {
 
   'POST /api/register/options': async (req, res) => {
     const body = await readBody(req);
+    if (EMAIL_AUTH) return json(res, 403, { error: 'new profiles sign up with an e-mail address and a password', code: 'email-required' });
     const name = text(body.name).trim().slice(0, 40);
     if (!name) return json(res, 400, { error: 'name required' });
     const code = text(body.code).trim().toUpperCase();
@@ -2216,6 +2454,7 @@ const routes = {
   },
 
   'POST /api/register/verify': async (req, res) => {
+    if (EMAIL_AUTH) return json(res, 403, { error: 'new profiles sign up with an e-mail address and a password', code: 'email-required' });
     const body = await readBody(req);
     const c = takeChallenge(body.cid);
     if (!c || c.kind !== 'register' || !c.uid) {
@@ -2531,6 +2770,7 @@ const routes = {
 
   // Absent entirely while PASSWORD_LOGIN is off, so each of them is a plain 404.
   ...(PASSWORD_LOGIN ? passwordRoutes : {}),
+  ...(EMAIL_AUTH ? emailRoutes : {}),
 
   // Always there: more passkeys and device links need nothing an instance has to switch on.
   ...passkeyRoutes,
@@ -2835,7 +3075,8 @@ const routes = {
         live: livePresence(u.id),
         // The sign-in e-mail is an admin's to see (to hand out a reset code, to tell two
         // profiles apart), and only while the instance takes passwords at all.
-        ...(PASSWORD_LOGIN ? { password: hasPassword(u), email: u.email || null } : {})
+        ...(PASSWORD_LOGIN ? { password: hasPassword(u), email: u.email || null } : {}),
+        ...(u.pendingSince ? { pending: true } : {})
       };
     });
     json(res, 200, { users, invite_only: INVITE_ONLY, ...(PASSWORD_LOGIN ? { password_login: true } : {}), now: Date.now() });
@@ -3012,7 +3253,8 @@ const routes = {
   /* ---------- trainer: their own clients and codes, nobody else's ---------- */
   'GET /api/trainer/clients': async (req, res) => {
     const trainer = requireTrainer(req, res); if (!trainer) return;
-    const clients = db.users.filter(u => u.trainerId === trainer.id).map(u => {
+    // A profile still waiting for its first letter is nobody's client yet: it has never signed in.
+    const clients = db.users.filter(u => u.trainerId === trainer.id && !(EMAIL_AUTH && u.pendingSince)).map(u => {
       const workouts = records((readState(u.id) || {}).workouts);
       const last = workouts[workouts.length - 1];
       return { id: u.id, name: u.name, created: u.created || null, disabled: !!u.disabled, workouts: workouts.length, lastWorkout: last ? last.d : null };
@@ -3141,6 +3383,42 @@ const routes = {
     db.invites.push(invite);
     saveDb();
     audit(req, 'trainer.invite.create', { user: trainer, msg: code });
+    json(res, 200, { invite });
+  },
+
+  // A code sent straight to the person. `sentTo` is there so the trainer can tell their codes apart:
+  // only they see it, and it goes when the code is used. Asking again for the same address sends the
+  // same code, so retries do not pile up. Answering that an address is taken tells a trainer no more
+  // than signing up would, and comes after the limits.
+  'POST /api/trainer/invites/send': async (req, res) => {
+    const trainer = requireTrainer(req, res); if (!trainer) return;
+    if (!EMAIL_AUTH) return json(res, 404, { error: 'not found' });
+    const body = await readBody(req);
+    const email = normalizeEmail(body.email);
+    if (!email) return json(res, 400, EMAIL_ERRORS.invalid);
+    const wait = MAIL_TRAINER.take(trainer.id) || MAIL_TARGET.take('invite|' + email);
+    if (wait) return tooMany(res, wait);
+    if (emailTaken(email, null)) {
+      audit(req, 'trainer.invite.send', { ok: false, user: trainer, msg: 'email-taken' });
+      return json(res, 409, EMAIL_ERRORS.taken);
+    }
+    let invite = db.invites.find(i => i.trainerId === trainer.id && i.sentTo === email && !i.usedBy);
+    const fresh = !invite;
+    if (fresh) {
+      let code;
+      do { code = crypto.randomBytes(8).toString('hex').toUpperCase(); } while (db.invites.some(i => i.code === code));
+      invite = { code, note: '', createdBy: trainer.id, trainerId: trainer.id, sentTo: email, created: new Date().toISOString() };
+      db.invites.push(invite);
+      saveDb();
+    }
+    try { await sendMail({ apiKey: RESEND_API_KEY, from: EMAIL_FROM, to: email, ...inviteLetter(ORIGIN, invite.code, trainer.name) }); }
+    catch (e) {
+      console.error('mail: could not send invite -', e.message);
+      if (fresh) { db.invites = db.invites.filter(i => i !== invite); saveDb(); }
+      audit(req, 'trainer.invite.send', { ok: false, user: trainer, msg: 'mail-failed' });
+      return json(res, 502, { error: 'the letter could not be sent, try again later', code: 'mail-failed' });
+    }
+    audit(req, 'trainer.invite.send', { user: trainer, msg: invite.code + ' · ' + maskEmail(email) });
     json(res, 200, { invite });
   },
 

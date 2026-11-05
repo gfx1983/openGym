@@ -431,6 +431,13 @@ export async function passwordLogin(name, password) {
 export async function passwordRegister(name, password, code, email) {
   return (await post('/api/register/password', { name, password, code: code || '', ...(email ? { email } : {}) })).user
 }
+// The letters of an instance with config.email_auth. A new profile gets no session: its letter
+// opens the way in, and none of these sign anyone in.
+export const emailSignUp = (name, password, code, email) => post('/api/register/password', { name, password, code: code || '', email })
+export const forgotPassword = email => post('/api/login/forgot', { email })
+export const forgotConfirm = (token, next) => post('/api/login/forgot/confirm', { token, next })
+export const verifyEmail = token => post('/api/email/verify', { token })
+export const resendVerification = email => post('/api/email/resend', { email })
 export async function passwordResetRedeem(name, code, next) {
   return (await post('/api/login/password-reset', { name, code, next })).user
 }

@@ -22,7 +22,8 @@ function RegisterSheet({ close }) {
   // A password is offered only where the instance allows it (#118), and is the only choice in a
   // browser that cannot make a passkey. Where both work, the passkey stays the first one.
   const pwOn = passwordOn(config)
-  const [how, setHow] = useState(webauthnOK() ? 'passkey' : 'password')
+  const emailAuth = !!config?.email_auth
+  const [how, setHow] = useState(webauthnOK() && !emailAuth ? 'passkey' : 'password')
   const ref = useRef(null)
   useEffect(() => { setTimeout(() => ref.current?.focus(), 250) }, [])
   // Boot already fetched this; retry here only if that attempt failed, so the invite field still
@@ -39,6 +40,12 @@ function RegisterSheet({ close }) {
       else { await pullState(); useUI.getState().toast(t('Welcome, {0}', u.name)) }
     } catch (e) { if (e.name !== 'NotAllowedError' && e.name !== 'AbortError') useUI.getState().toast(passkeyError(e, t('Registration failed'))) }
   }
+  // With sign-up by e-mail there is nothing to choose: a passkey is added in Settings afterwards.
+  if (emailAuth) return <>
+    <h3>{t('Create your profile')}</h3>
+    <div className="muted small" style={{ marginBottom: 14 }}>Укажите имя, адрес и пароль. Войти можно будет после подтверждения адреса по ссылке из письма.</div>
+    <PasswordRegisterForm close={close} inviteOnly={inviteOnly} name={name} setName={setName} code={code} setCode={setCode} />
+  </>
   const choose = pwOn && webauthnOK() && <>
     <Segmented options={[{ value: 'passkey', label: t('Passkey'), icon: 'fingerprint' }, { value: 'password', label: t('Password'), icon: 'key' }]}
       value={how} onChange={setHow} />

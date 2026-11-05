@@ -12,7 +12,7 @@ import { useStore, hasData } from '../store/useStore.js'
 import { useUI } from '../store/useUI.js'
 import { t } from '../lib/i18n.js'
 import { dateLocale } from '../lib/i18n-core.js'
-import { api, webauthnOK, passkeyAssertion, passwordLogin, passwordRegister, passwordResetRedeem } from '../lib/api.js'
+import { api, webauthnOK, passkeyAssertion, passwordLogin, passwordRegister, passwordResetRedeem, emailSignUp, forgotPassword, resendVerification } from '../lib/api.js'
 import { askAddDeviceData } from '../sheets.jsx'
 import { Row, Button } from './ui.jsx'
 
@@ -62,6 +62,9 @@ export function passwordError(e) {
     case 'last-way-in': return t('This password is the only way into your profile, so it cannot be removed.')
     case 'reset-invalid': return t('That reset code is wrong or has expired. Ask your admin for a new one.')
     case 'disabled': return t('This account has been disabled.')
+    case 'email-unverified': return 'Сначала подтвердите адрес по ссылке из письма.'
+    case 'email-required': return 'Укажите адрес электронной почты.'
+    case 'mail-failed': return 'Не удалось отправить письмо. Попробуйте позже.'
     case 'busy': return t('The server is busy. Try again in a moment.')
   }
   return e?.message || t('Sign-in failed')
@@ -86,7 +89,10 @@ const codeStyle = { letterSpacing: '.14em', fontWeight: 600, textAlign: 'center'
    sets a new password and signs in. `onPasskey`, when given, offers the passkey instead. The
    inputs carry the autocomplete names password managers look for, inside a real form. */
 export function PasswordSignInSheet({ close, onPasskey }) {
-  const [mode, setMode] = useState('signin')   // 'signin' | 'reset'
+  const [mode, setMode] = useState('signin')   // 'signin' | 'reset' | 'forgot'
+  const emailAuth = !!useStore(s => s.config)?.email_auth
+  const [unverified, setUnverified] = useState(false)
+  const [sent, setSent] = useState(null)   // what the last letter was for, once asked for
   const [name, setName] = useState('')
   const [pw, setPw] = useState('')
   const [code, setCode] = useState('')
@@ -97,6 +103,19 @@ export function PasswordSignInSheet({ close, onPasskey }) {
   const nameRef = useRef(null)
   useEffect(() => { setTimeout(() => nameRef.current?.focus(), 250) }, [])
   const reset = mode === 'reset'
+  // Answers the same whoever holds the address (the server's rule), so it says the same here.
+  const askLetter = async (ask, what) => {
+    setBusy(true); setErr(null)
+    try { await ask(name.trim()); setSent(what) }
+    catch (e) { setErr(passwordError(e)) }
+    finally { setBusy(false) }
+  }
+  const forgot = ev => {
+    ev.preventDefault()
+    if (busy) return
+    if (!looksLikeEmail(name)) { setErr(t('That is not an e-mail address.')); return }
+    askLetter(forgotPassword, 'reset')
+  }
   const submit = async ev => {
     ev.preventDefault()
     if (busy) return
@@ -111,9 +130,29 @@ export function PasswordSignInSheet({ close, onPasskey }) {
     if (bad) { setErr(bad); return }
     setBusy(true); setErr(null)
     try { await signedIn(reset ? await passwordResetRedeem(n, code.trim(), next) : await passwordLogin(n, pw), close) }
-    catch (e) { setErr(passwordError(e)) }
+    catch (e) { setUnverified(e?.data?.code === 'email-unverified'); setErr(passwordError(e)) }
     finally { setBusy(false) }
   }
+  if (sent) return <>
+    <h3>Проверьте почту</h3>
+    <div className="muted small" style={{ marginBottom: 14, overflowWrap: 'anywhere' }}>{sent === 'reset'
+      ? `Если адрес ${name.trim()} подтверждён, на него придёт ссылка для нового пароля. Она действует 30 минут.`
+      : `Если адрес ${name.trim()} ждёт подтверждения, на него придёт новое письмо. Ссылка действует сутки.`} Письмо может попасть в спам.</div>
+    <Button type="button" variant="primary" onClick={close}>{t('Done')}</Button>
+  </>
+  if (mode === 'forgot') return <>
+    <h3>Забыли пароль?</h3>
+    <div className="muted small" style={{ marginBottom: 14 }}>Укажите адрес профиля, и мы отправим ссылку для нового пароля. Старый пароль работает, пока вы не зададите новый.</div>
+    <form onSubmit={forgot} noValidate>
+      <input ref={nameRef} className="input" type="email" name="email" autoComplete="email" inputMode="email" placeholder={t('E-mail address')} maxLength={254}
+        value={name} onChange={e => setName(e.target.value)} {...field} />
+      {err && <div className="small" role="alert" style={errStyle}>{err}</div>}
+      <div style={{ height: 12 }} />
+      <Button type="submit" variant="primary" disabled={busy}>Отправить письмо</Button>
+    </form>
+    <div style={{ height: 8 }} />
+    <Button type="button" variant="ghost" className="dim" onClick={() => { setErr(null); setMode('signin') }}>{t('Sign in with password')}</Button>
+  </>
   return <>
     <h3>{reset ? t('Reset your password') : t('Sign in with password')}</h3>
     <div className="muted small" style={{ marginBottom: 14 }}>{reset
@@ -141,6 +180,14 @@ export function PasswordSignInSheet({ close, onPasskey }) {
       <div style={{ height: 12 }} />
       <Button type="submit" variant="primary" disabled={busy}>{reset ? t('Set password & sign in') : t('Sign in')}</Button>
     </form>
+    {unverified && looksLikeEmail(name) && <>
+      <div style={{ height: 8 }} />
+      <Button type="button" disabled={busy} onClick={() => askLetter(resendVerification, 'verify')}>Отправить письмо ещё раз</Button>
+    </>}
+    {emailAuth && !reset && <>
+      <div style={{ height: 8 }} />
+      <Button type="button" variant="ghost" className="dim" onClick={() => { setErr(null); setUnverified(false); setMode('forgot') }}>Забыли пароль?</Button>
+    </>}
     <div style={{ height: 8 }} />
     <Button type="button" variant="ghost" className="dim" onClick={() => { setErr(null); setMode(reset ? 'signin' : 'reset') }}>
       {reset ? t('Sign in with password') : t('Have a reset code from your admin?')}</Button>
@@ -160,12 +207,15 @@ export function PasswordRegisterForm({ close, inviteOnly, name, setName, code, s
   const [again, setAgain] = useState('')
   const [busy, setBusy] = useState(false)
   const [err, setErr] = useState(null)
+  const emailAuth = !!useStore(s => s.config)?.email_auth
+  const [sent, setSent] = useState(false)
   const submit = async ev => {
     ev.preventDefault()
     if (busy) return
     const n = name.trim()
     const mail = email.trim()
     const bad = !n ? t('Enter a name')
+      : emailAuth && !mail ? 'Укажите адрес электронной почты.'
       : mail && !looksLikeEmail(mail) ? t('That is not an e-mail address.')
       : inviteOnly && !code.trim() ? t('An invite code is required')
       : length(pw) < MIN_PASSWORD ? t('Use at least {0} characters.', MIN_PASSWORD)
@@ -174,6 +224,7 @@ export function PasswordRegisterForm({ close, inviteOnly, name, setName, code, s
     if (bad) { setErr(bad); return }
     setBusy(true); setErr(null)
     try {
+      if (emailAuth) { await emailSignUp(n, pw, code.trim(), mail); setSent(true); return }
       const u = await passwordRegister(n, pw, code.trim(), mail)
       const st = useStore.getState()
       st.setUser(u); close()
@@ -182,13 +233,14 @@ export function PasswordRegisterForm({ close, inviteOnly, name, setName, code, s
     } catch (e) { setErr(passwordError(e)) }
     finally { setBusy(false) }
   }
+  if (sent) return <CheckYourMail email={email.trim()} close={close} />
   return <form onSubmit={submit} noValidate>
     <input className="input" name="username" autoComplete="username" placeholder={t('Your name')} maxLength={40}
       value={name} onChange={e => setName(e.target.value)} {...field} />
     <div style={{ height: 10 }} />
-    <input className="input" type="email" name="email" autoComplete="email" inputMode="email" placeholder={t('E-mail (optional)')} maxLength={254}
+    <input className="input" type="email" name="email" autoComplete="email" inputMode="email" placeholder={emailAuth ? t('E-mail address') : t('E-mail (optional)')} maxLength={254}
       value={email} onChange={e => setEmail(e.target.value)} {...field} />
-    <div className="dim small" style={{ marginTop: 6 }}>{t('Lets you sign in with it instead of your name. Nothing is ever sent to it.')}</div>
+    <div className="dim small" style={{ marginTop: 6 }}>{emailAuth ? 'На этот адрес придёт письмо со ссылкой для подтверждения.' : t('Lets you sign in with it instead of your name. Nothing is ever sent to it.')}</div>
     {inviteOnly && <>
       <div style={{ height: 10 }} />
       <input className="input" placeholder={t('Invite code')} maxLength={40} value={code}
@@ -206,6 +258,25 @@ export function PasswordRegisterForm({ close, inviteOnly, name, setName, code, s
     <div style={{ height: 12 }} />
     <Button type="submit" variant="primary" disabled={busy}>{t('Create profile')}</Button>
   </form>
+}
+
+// After sign-up by e-mail: nothing to do here but open the letter, or ask for it again.
+function CheckYourMail({ email, close }) {
+  const [busy, setBusy] = useState(false)
+  const again = async () => {
+    setBusy(true)
+    try { await resendVerification(email); toast('Письмо отправлено ещё раз') }
+    catch (e) { toast(passwordError(e)) }
+    finally { setBusy(false) }
+  }
+  return <>
+    <div className="small" style={{ marginBottom: 14, overflowWrap: 'anywhere' }}>
+      {`Мы отправили письмо на ${email}. Откройте ссылку из него, затем войдите с адресом и паролем. Ссылка действует сутки, письмо может попасть в спам.`}
+    </div>
+    <Button type="button" variant="primary" onClick={close}>{t('Done')}</Button>
+    <div style={{ height: 8 }} />
+    <Button type="button" variant="ghost" className="dim" disabled={busy} onClick={again}>Отправить письмо ещё раз</Button>
+  </>
 }
 
 // The same form on its own sheet — Settings, in a browser that cannot make a passkey.
@@ -416,7 +487,11 @@ function RemovePasswordSheet({ status, close, done }) {
    the proof a password does (ProveOwner): a copied session must not choose how the owner signs
    in. `status` is GET /api/account/password, whose `email` only the owner ever gets. */
 export function EmailRow({ status, done }) {
-  const subtitle = status.email && !status.set ? t('“{0}” is saved, but signs in only once this profile has a password.', status.email)
+  const subtitle = status.emailPending ? `Ждём подтверждения: ${status.emailPending}`
+    : status.email_auth && status.email && !status.emailProven ? `${status.email} не подтверждён. Сброс пароля на него не придёт.`
+    : status.email_auth && status.email ? `${status.email}. На него придёт ссылка для сброса пароля.`
+    : status.email_auth ? 'Не задан. Без адреса пароль можно сбросить только через администратора.'
+    : status.email && !status.set ? t('“{0}” is saved, but signs in only once this profile has a password.', status.email)
     : status.email ? t('Sign in with “{0}” instead of your name', status.email)
     : t('Not set. Lets you sign in with an e-mail instead of your name.')
   return <Row icon="envelope" iconTint="var(--blue)" title={t('Sign-in e-mail')} subtitle={subtitle} accessory="chevron"
@@ -434,7 +509,7 @@ export function EmailSheet({ status, close, done }) {
   const next = ev => {
     ev.preventDefault()
     const bad = !clean || !looksLikeEmail(clean) ? t('That is not an e-mail address.')
-      : foldEmail(clean) === status.email ? t('That is already your sign-in e-mail.')
+      : foldEmail(clean) === status.email && (!status.email_auth || status.emailProven) ? t('That is already your sign-in e-mail.')
       : null
     if (bad) { setErr(bad); return }
     setErr(null); setStep('confirm')
@@ -442,13 +517,15 @@ export function EmailSheet({ status, close, done }) {
   const save = async proof => {
     await api('/api/account/email', { method: 'POST', body: JSON.stringify({ email: clean, ...proof }) })
     close(); done()
-    toast(t('E-mail saved'))
+    toast(status.email_auth ? 'Письмо отправлено. Адрес изменится после перехода по ссылке.' : t('E-mail saved'))
   }
   const remove = () => ui().openSheet(c => <RemoveEmailSheet status={status} close={c} done={() => { close(); done() }} />)
   return <>
     <h3>{status.email ? t('Change sign-in e-mail') : t('Add a sign-in e-mail')}</h3>
     <div className="muted small" style={{ marginBottom: 14 }}>
-      {t('Type it at “Sign in with password” instead of your profile name. We never send anything to it; a forgotten password is still reset by your admin.')}
+      {status.email_auth
+        ? 'С этим адресом можно входить вместо имени, и на него придёт ссылка, если вы забудете пароль. Новый адрес начнёт работать после перехода по ссылке из письма.'
+        : t('Type it at “Sign in with password” instead of your profile name. We never send anything to it; a forgotten password is still reset by your admin.')}
     </div>
     {step === 'edit' ? <>
       <form onSubmit={next} noValidate>

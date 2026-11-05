@@ -5,6 +5,7 @@
 // (Passkeys.jsx): a recovery code is redeemed exactly like one. The phone app cannot make a
 // passkey for the server, so there the code goes into a browser first and the app is paired again.
 import { useUI } from '../store/useUI.js'
+import { useStore } from '../store/useStore.js'
 import { t } from '../lib/i18n.js'
 import { MOBILE } from '../lib/mobile.js'
 import { openDeviceLinkRedeem } from './Passkeys.jsx'
@@ -19,11 +20,15 @@ const STEPS = () => [
 ]
 
 export function LostAccessSheet({ close }) {
+  const emailAuth = !!useStore(s => s.config)?.email_auth
+  const steps = emailAuth
+    ? [['key', 'Забыли пароль?', 'В окне «Войти с паролем» нажмите «Забыли пароль?». Ссылка для нового пароля придёт на ваш адрес.'], ...STEPS()]
+    : STEPS()
   return <>
     <h3>{t('Lost access?')}</h3>
     <div className="muted small" style={{ marginBottom: 14, lineHeight: 1.5 }}>{t('No panic: your training is safe on the server. One of these gets you back in.')}</div>
     <div style={{ display: 'grid', gap: 14, marginBottom: 18 }}>
-      {STEPS().map(([icon, title, body]) => <div key={title} className="row" style={{ gap: 12, alignItems: 'flex-start' }}>
+      {steps.map(([icon, title, body]) => <div key={title} className="row" style={{ gap: 12, alignItems: 'flex-start' }}>
         <span style={{ color: 'var(--acc-ink)', fontSize: 'var(--fs-title3)', marginTop: 1 }}><Icon name={icon} /></span>
         <div><div style={{ fontWeight: 600, marginBottom: 2 }}>{title}</div><div className="small muted" style={{ lineHeight: 1.45, overflowWrap: 'anywhere' }}>{body}</div></div>
       </div>)}

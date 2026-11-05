@@ -42,6 +42,8 @@ const LABELS = {
   'auth.password.reset': 'Used a reset code',
   // The e-mail a profile may sign in with instead of its name. `msg` is the proof it was set with
   // and the address masked to two characters ("password · a…@e…") — never the address itself.
+  'auth.email.verify': 'Confirmed an e-mail address',
+  'auth.password.forgot': 'Asked for a password reset letter',
   'auth.email.set': 'Added a sign-in e-mail',
   'auth.email.change': 'Changed their sign-in e-mail',
   'auth.email.remove': 'Removed their sign-in e-mail',
@@ -76,6 +78,7 @@ const LABELS = {
   'admin.trainer.revoke': 'Removed someone as trainer',
   'trainer.invite.create': 'A trainer created an invite code',
   'trainer.invite.revoke': 'A trainer revoked an invite code',
+  'trainer.invite.send': 'A trainer sent an invite by e-mail',
   'trainer.denied': 'Blocked from a trainer action',
   'account.trainer.unlink': 'A client left their trainer',
   'trainer.plan.send': 'A trainer sent a client a plan',
@@ -112,6 +115,10 @@ const REASONS = {
   'unknown-name': 'no profile with a password has that name',
   'unknown-email': 'no profile with a password has that e-mail',
   'email-taken': 'another profile already uses that e-mail',
+  'email-unverified': 'the e-mail address has not been confirmed yet',
+  'email-token-invalid': 'the link from the letter is wrong, used or expired',
+  'mail-failed': 'the letter could not be sent',
+  'letter': 'through a letter',
   'step-up-failed': 'the passkey confirming the change was rejected',
   'reset-invalid': 'wrong or expired reset code',
   'link-invalid': 'wrong, used or expired device code',

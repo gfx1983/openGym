@@ -94,6 +94,11 @@ info:
       log served by `GET /api/admin/audit`.
     - `PASSWORD_LOGIN=1`: adds the `password` routes and `password_login: true` in
       `GET /api/config`. Off by default.
+    - `EMAIL_AUTH=1` with `PASSWORD_LOGIN=1`, `RESEND_API_KEY` and `EMAIL_FROM`: new profiles
+      sign up with an address and a password and sign in once a letter has proven the address;
+      adds `email_auth: true` in `GET /api/config`, the reset and confirmation routes, and
+      refuses passkey sign-up with `403 email-required`. Off by default. Profiles from before
+      it sign in as they did.
     - `DEFAULT_LANG` (e.g. `pt-BR`; unset by default): `default_lang` in `GET /api/config`,
       the language of the sign-in screen and of every profile that never picked one.
     - `TRUST_PROXY=1`: the throttle reads the client address from proxy headers (set by
@@ -1072,14 +1077,15 @@ paths:
         '400':
           description: >-
             The password breaks the policy with `too-short` (under 10 characters), `too-long`
-            (over 256) or `too-common`; a field is `missing`; or `email-invalid`: the
-            `email` given is not an e-mail address.
+            (over 256) or `too-common`; a field is `missing`; `email-invalid`: the
+            `email` given is not an e-mail address; or `email-required`: none given with `EMAIL_AUTH`.
           content:
             application/json:
               schema: { $ref: '#/components/schemas/Error' }
               examples:
                 policy: { value: { error: "this password is too easy to guess", code: "too-common" } }
                 email: { value: { error: "that is not an e-mail address", code: "email-invalid" } }
+                emailRequired: { value: { error: "an e-mail address is required", code: "email-required" } }
         '403':
           description: Invite-only and the code is missing, used or revoked.
           content:
@@ -1094,8 +1100,147 @@ paths:
             application/json:
               schema: { $ref: '#/components/schemas/Error' }
               example: { error: "another profile already uses this e-mail address", code: "email-taken" }
+        '502':
+          description: "`mail-failed`: the letter could not be sent. With `EMAIL_AUTH` only."
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/Error' }
         '429': { $ref: '#/components/responses/TooManyRequests' }
         '503': { $ref: '#/components/responses/Busy' }
+
+  /api/login/forgot:
+    post:
+      tags: [password]
+      operationId: askPasswordResetLetter
+      summary: Ask for a password reset letter
+      description: |
+        With `EMAIL_AUTH` only. Sends a link valid 30 minutes to a confirmed address, or to a
+        profile still waiting for its first letter. Changes nothing until the link is used. The
+        answer is the same whoever holds the address, and the letter goes after it. Letters are
+        limited per caller's address (`429`) and, in silence, per account.
+      security: []
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [email]
+              properties:
+                email: { type: string }
+      responses:
+        '200': { description: Asked. Says nothing about whether the address has an account. }
+        '400':
+          description: "`email-invalid`: not an address."
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/Error' }
+        '429': { $ref: '#/components/responses/TooManyRequests' }
+
+  /api/login/forgot/confirm:
+    post:
+      tags: [password]
+      operationId: confirmPasswordResetLetter
+      summary: Set a new password with the link from a reset letter
+      description: |
+        With `EMAIL_AUTH` only. Single use. Ends every session of the account and proves the
+        address. Starts no session: the person signs in with the new password. A password that
+        breaks the policy is refused without using up the link.
+      security: []
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [token, next]
+              properties:
+                token: { type: string }
+                next: { type: string, minLength: 10, maxLength: 256 }
+      responses:
+        '200': { description: Password set. }
+        '400':
+          description: "`email-token-invalid`: wrong, used or expired; or the password policy."
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/Error' }
+        '403':
+          description: "`disabled`: the account has been disabled."
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/Error' }
+        '409':
+          description: "`name-taken`: another profile signs in with this name."
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/Error' }
+        '429': { $ref: '#/components/responses/TooManyRequests' }
+        '503': { $ref: '#/components/responses/Busy' }
+
+  /api/email/verify:
+    post:
+      tags: [password]
+      operationId: verifyEmailAddress
+      summary: Confirm an address with the link from a letter
+      description: |
+        With `EMAIL_AUTH` only. Single use, valid 24 hours. Opens sign-in for a new profile, or
+        makes a new address from Settings the profile's address. Starts no session.
+      security: []
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [token]
+              properties:
+                token: { type: string }
+      responses:
+        '200': { description: Confirmed. }
+        '400':
+          description: "`email-token-invalid`: wrong, used or expired."
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/Error' }
+        '403':
+          description: "`disabled`: the account has been disabled."
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/Error' }
+        '409':
+          description: "`email-taken`: another profile took the address since the letter went."
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/Error' }
+        '429': { $ref: '#/components/responses/TooManyRequests' }
+
+  /api/email/resend:
+    post:
+      tags: [password]
+      operationId: resendConfirmationLetter
+      summary: Send the confirmation letter of a new profile again
+      description: |
+        With `EMAIL_AUTH` only. The answer is the same whoever holds the address, and the letter
+        goes after it. Letters are limited per caller's address (`429`) and, in silence, per
+        account.
+      security: []
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [email]
+              properties:
+                email: { type: string }
+      responses:
+        '200': { description: Asked. Says nothing about whether the address has an account. }
+        '400':
+          description: "`email-invalid`: not an address."
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/Error' }
+        '429': { $ref: '#/components/responses/TooManyRequests' }
 
   /api/login/password-reset:
     post:
@@ -1276,8 +1421,11 @@ paths:
       summary: Set, change or remove the e-mail this profile may sign in with
       description: |
         An e-mail address to type at `POST /api/login/password` instead of the profile
-        name. No mail is ever sent to it (there is no verification and no reset mail;
-        resets stay the admin's one-time code), so it is only an identifier. Stored
+        name. With `EMAIL_AUTH` off no mail is ever sent to it (there is no verification and
+        no reset mail; resets stay the admin's one-time code), so it is only an identifier.
+        With `EMAIL_AUTH` on a new address is not set by this call: a letter goes to it, the
+        answer is `{ ok, email, pending }`, `502 mail-failed` if the letter cannot be sent, and
+        the address takes effect through `POST /api/email/verify`. Stored
         trimmed, NFKC-normalised and lower-cased; at most 254 characters; unique across
         every profile, and never another password-holding profile's name. An empty or null
         `email` removes it (as `DELETE` does).
@@ -1327,6 +1475,11 @@ paths:
             application/json:
               schema: { $ref: '#/components/schemas/Error' }
               example: { error: "another profile already uses this e-mail address", code: "email-taken" }
+        '502':
+          description: "`mail-failed`: the letter could not be sent. With `EMAIL_AUTH` only."
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/Error' }
         '429': { $ref: '#/components/responses/TooManyRequests' }
         '503': { $ref: '#/components/responses/Busy' }
     delete:
@@ -3205,6 +3358,33 @@ paths:
         '200': { description: The new code. }
         '401': { description: Not signed in. }
         '403': { description: Not a trainer. }
+  /api/trainer/invites/send:
+    post:
+      tags: [admin]
+      operationId: trainerInviteSend
+      summary: 'Send a one-time code to an address, in a letter'
+      description: |
+        With `EMAIL_AUTH` only. The code works like one from `/api/trainer/invites/new`, and the
+        address stays on it as `sentTo` until it is used. Asking again for the same address sends
+        the same code. Limited per trainer (20 an hour) and per address (3 in 15 minutes).
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [email]
+              properties:
+                email: { type: string }
+      responses:
+        '200': { description: The code that was sent. }
+        '400': { description: 'Not an address (`email-invalid`).' }
+        '401': { description: Not signed in. }
+        '403': { description: Not a trainer. }
+        '404': { description: '`EMAIL_AUTH` is off.' }
+        '409': { description: 'A profile already uses this address (`email-taken`).' }
+        '429': { description: Too many letters. }
+        '502': { description: 'The letter could not be sent (`mail-failed`); no new code is left behind.' }
   /api/trainer/invites/revoke:
     post:
       tags: [admin]
