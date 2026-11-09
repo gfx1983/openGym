@@ -13,6 +13,7 @@ import { confirmSheet } from '../sheets.jsx'
 import Icon from '../components/Icon.jsx'
 import LineChart from '../components/LineChart.jsx'
 import { Button } from '../components/ui.jsx'
+import IntakeAnswers from '../components/IntakeAnswers.jsx'
 import '../admin.css'
 
 // One client: what they logged and what they follow. The document comes straight off their state
@@ -49,6 +50,26 @@ function PlanStatus({ plan, id, setPlan }) {
       {plan.summary?.length ? ': ' + plan.summary.join('; ') : ''}
     </div>
     {plan.status === 'pending' && <Button size="sm" onClick={withdraw}>Отозвать</Button>}
+  </div>
+}
+
+// Health among the answers: read here only, never copied into the plan or a note by the app.
+function IntakeCard({ intake, id, setIntake }) {
+  const toast = useUI(s => s.toast)
+  const [open, setOpen] = useState(false)
+  const ask = () => api('/api/trainer/client/intake/request', { method: 'POST', body: JSON.stringify({ id }) })
+    .then(r => { setIntake(r.intake); toast('Запрос отправлен клиенту') }).catch(e => toast(e.message))
+  const state = !intake ? 'Клиент ещё не заполнял.'
+    : !intake.shortDoneAt ? 'Заполняется, показаны сохранённые ответы.'
+    : intake.extendedDoneAt ? 'Заполнена вместе с расширенной частью.'
+    : intake.extendedRequestedAt ? 'Расширенная часть запрошена, клиент ещё не закончил.'
+    : 'Короткая часть заполнена.'
+  return <div className="card">
+    <div className="row between"><h2 style={{ margin: 0 }}>Анкета</h2>
+      {intake && <Button size="sm" aria-expanded={open} onClick={() => setOpen(x => !x)}>{open ? 'Скрыть' : 'Показать'}</Button>}</div>
+    <div className="dim small" style={{ marginTop: 6 }}>{state}</div>
+    {open && <IntakeAnswers answers={intake.answers} />}
+    {intake?.shortDoneAt && !intake.extendedRequestedAt && <Button size="sm" style={{ marginTop: 8 }} onClick={ask}>Попросить расширенную анкету</Button>}
   </div>
 }
 
@@ -109,6 +130,7 @@ export default function TrainerClient() {
   const fields = enabledMeasurementFields(d)
   const latest = measurements[measurements.length - 1]
   const setPlan = plan => setD(x => ({ ...x, plan }))
+  const setIntake = intake => setD(x => ({ ...x, intake }))
   // Read again on the way in: the plan and the weights as the client has them now.
   const editPlan = () => api('/api/trainer/client?id=' + encodeURIComponent(id)).then(fresh => {
     if (enterWorkspace(fresh)) nav('/plan')
@@ -118,6 +140,8 @@ export default function TrainerClient() {
   return <div className="narrow">
     {header(d.user.name)}
     <div className="adm-lead" style={{ marginBottom: 12 }}>С нами с {d.user.created ? fmtDate(d.user.created.slice(0, 10)) : '–'}</div>
+
+    <IntakeCard intake={d.intake} id={d.user.id} setIntake={setIntake} />
 
     <div className="card">
       <h2 style={{ margin: 0 }}>Вес тела</h2>

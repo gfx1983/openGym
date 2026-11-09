@@ -41,6 +41,26 @@ describe('Home with no plan', () => {
     expect(host.textContent).not.toContain(STARTER)
   })
 
+  it('reminds a client of the questionnaire beside the trainer card, until it is done', async () => {
+    mocks.answer = async () => ({ trainer: { id: 't', name: 'Макс' }, plan: null, intake: null })
+    await draw()
+    expect(host.textContent).toContain('Заполните анкету для тренера')
+    expect(host.textContent).toContain('Ваш тренер Макс готовит программу')
+    await act(async () => { root.unmount() })
+    root = createRoot(host)
+    mocks.answer = async () => ({ trainer: { id: 't', name: 'Макс' }, plan: null, intake: { shortDoneAt: 'x' } })
+    await draw()
+    expect(host.textContent).not.toContain('анкету')
+  })
+
+  it('does not remind anyone in the trainer workspace', async () => {
+    mocks.answer = async () => ({ trainer: { id: 't', name: 'Макс' }, plan: null, intake: null })
+    useStore.setState({ tourSandbox: true })
+    await draw()
+    useStore.setState({ tourSandbox: false })
+    expect(host.textContent).not.toContain('анкету')
+  })
+
   it('offers the starter plan to someone without a trainer, or when the server cannot say', async () => {
     mocks.answer = async () => ({ trainer: null, plan: null })
     await draw()

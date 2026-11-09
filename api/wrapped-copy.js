@@ -54,8 +54,8 @@ export const WRAPPED_COPY = {
     "body": "Treinos, recordes e um teste de personalidade bem sincero. Toque para ver seu ano."
   },
   "ru": {
-    "title": "Твой {0} в openGym готов 🎉",
-    "body": "Тренировки, рекорды и один очень честный тест на характер. Нажми, чтобы увидеть свой год."
+    "title": "Ваш {0} в openGym готов 🎉",
+    "body": "Тренировки, рекорды и один очень честный тест на характер. Нажмите, чтобы увидеть свой год."
   },
   "sv": {
     "title": "Ditt {0} i openGym är klart 🎉",

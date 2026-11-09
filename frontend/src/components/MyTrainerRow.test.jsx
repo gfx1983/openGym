@@ -10,6 +10,7 @@ globalThis.IS_REACT_ACT_ENVIRONMENT = true
 
 const mocks = vi.hoisted(() => ({ trainer: null, calls: [], sheet: null, toast: () => {} }))
 
+vi.mock('react-router-dom', () => ({ useNavigate: () => () => {} }))
 vi.mock('../lib/api.js', () => ({
   api: (url, opts) => {
     mocks.calls.push([url, opts?.method || 'GET'])

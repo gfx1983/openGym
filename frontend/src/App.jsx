@@ -46,6 +46,7 @@ import Modals from './components/Modals.jsx'
 import Toast from './components/Toast.jsx'
 import SyncBanner from './components/SyncBanner.jsx'
 import TrainerPlanSync from './components/TrainerPlanSync.jsx'
+import IntakeGate from './components/IntakeGate.jsx'
 import TrainerWorkspaceBar from './components/TrainerWorkspaceBar.jsx'
 import RestTimer from './components/RestTimer.jsx'
 import TimerFlash from './components/TimerFlash.jsx'
@@ -80,6 +81,7 @@ function lazyView(load) {
 const Admin = lazyView(() => import('./views/Admin.jsx'))
 const Trainer = lazyView(() => import('./views/Trainer.jsx'))
 const TrainerClient = lazyView(() => import('./views/TrainerClient.jsx'))
+const Intake = lazyView(() => import('./views/Intake.jsx'))
 const CoachChat = lazyView(() => import('./views/CoachChat.jsx'))
 const Measurements = lazyView(() => import('./views/Measurements.jsx'))
 const CoachIntake = lazyView(() => import('./views/CoachIntake.jsx'))
@@ -363,6 +365,7 @@ function Shell() {
       <Route path="/admin" element={user?.admin ? <Admin /> : <Navigate to="/home" replace />} />
       <Route path="/trainer" element={user?.trainer ? <Trainer /> : <Navigate to="/home" replace />} />
       <Route path="/trainer/client/:id" element={user?.trainer ? <TrainerClient /> : <Navigate to="/home" replace />} />
+      <Route path="/intake" element={<Intake />} />
       <Route path="*" element={<Navigate to="/home" replace />} />
     </Routes>
   ))
@@ -384,6 +387,7 @@ function Shell() {
           including on the sign-in screen, when the server has just ended the session. */}
       <SyncBanner />
       <TrainerPlanSync />
+      <IntakeGate />
       <TrainerWorkspaceBar />
       {!noTabs && <TabBar onStart={startFlow} />}
       {!noTabs && authed && <ScrollTopButton off={loc.pathname === '/workout'} path={loc.pathname} />}

@@ -1,4 +1,5 @@
 import { useEffect, useState } from 'react'
+import { useNavigate } from 'react-router-dom'
 import { useUI } from '../store/useUI.js'
 import { useStore } from '../store/useStore.js'
 import { undoAndTell } from '../lib/trainer-plan.js'
@@ -15,6 +16,7 @@ import { Row } from './ui.jsx'
 const changed = new EventTarget()
 
 export default function MyTrainerRow() {
+  const nav = useNavigate()
   const toast = useUI(s => s.toast)
   const [trainer, setTrainer] = useState(null)
   const undo = useStore(s => s.S.trainerUndo)
@@ -39,7 +41,7 @@ export default function MyTrainerRow() {
   if (!trainer) return undoRow || null
   const unlink = () => confirmSheet({
     title: 'Отвязаться от тренера?',
-    message: trainer.name + ' больше не увидит ваши тренировки, вес, замеры и программы и не сможет менять ваш план. Ваши данные останутся у вас. Вернуться можно только по новому коду.',
+    message: trainer.name + ' больше не увидит ваши тренировки, вес, замеры и программы и не сможет менять ваш план. Ваши данные останутся у вас, но анкета для тренера удалится. Вернуться можно только по новому коду.',
     confirmText: 'Отвязаться', danger: true,
     onConfirm: () => api('/api/account/trainer/unlink', { method: 'POST', body: '{}' })
       .then(() => { changed.dispatchEvent(new Event('change')); toast('Вы отвязались от тренера') })
@@ -48,6 +50,7 @@ export default function MyTrainerRow() {
   return <>
     <Row icon="person" iconTint="var(--indigo)" title={'Мой тренер: ' + trainer.name}
       subtitle="Видит ваши тренировки, вес, замеры и программы и может менять ваш план. Нажмите, чтобы отвязаться." onClick={unlink} />
+    <Row icon="clipboard" iconTint="var(--indigo)" title="Моя анкета" subtitle="Посмотреть, изменить или удалить ответы." accessory="chevron" onClick={() => nav('/intake')} />
     {pushOn === false && <Row icon="bell" iconTint="var(--indigo)" title="Уведомлять о новых программах"
       subtitle="Сообщение на телефон, когда тренер изменит ваш план."
       onClick={() => enablePush().then(() => { setPushOn(true); toast('Уведомления включены') }).catch(e => toast(e.message))} />}

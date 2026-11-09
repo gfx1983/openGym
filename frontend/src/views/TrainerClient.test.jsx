@@ -75,6 +75,24 @@ describe('TrainerClient', () => {
     expect(host.textContent).toContain('3 × 12 · 40')
   })
 
+  it('says when the questionnaire is not filled in, and offers nothing to open', async () => {
+    mocks.answer = client({ intake: null })
+    await render()
+    expect(host.textContent).toContain('Клиент ещё не заполнял')
+    expect(host.textContent).not.toContain('Показать')
+  })
+
+  it('opens the answers as text and offers the longer part after the short one', async () => {
+    mocks.answer = client({ intake: { shortDoneAt: 'x', answers: { sex: 'female', limits: 'yes', limits_details: 'колено' } } })
+    await render()
+    expect(host.textContent).not.toContain('колено')
+    const show = [...host.querySelectorAll('button')].find(b => b.textContent === 'Показать')
+    await act(async () => { show.click() })
+    expect(host.textContent).toContain('Женский')
+    expect(host.textContent).toContain('колено')
+    expect(host.textContent).toContain('Попросить расширенную анкету')
+  })
+
   it('skips shapeless entries instead of crashing, and opens a workout to show its sets', async () => {
     mocks.answer = client({
       bodyweight: [null, { d: '2026-11-01' }],

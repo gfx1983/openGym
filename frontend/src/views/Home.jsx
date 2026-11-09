@@ -47,6 +47,22 @@ function useTrainerOfNewProfile(asked, userId) {
   return name
 }
 
+// What the client still owes their trainer: the short questionnaire, or the longer part once asked.
+function useIntakeReminder(userId) {
+  const [left, setLeft] = useState(null)
+  useEffect(() => {
+    if (!userId || useStore.getState().tourSandbox) return
+    let gone = false
+    api('/api/account/intake').then(d => {
+      if (gone || !d?.trainer) return
+      if (!d.intake?.shortDoneAt) setLeft({ to: '/intake', title: 'Заполните анкету для тренера', sub: 'Несколько коротких вопросов для вашей программы.' })
+      else if (d.intake.extendedRequestedAt && !d.intake.extendedDoneAt) setLeft({ to: '/intake?part=extended', title: 'Тренер просит заполнить расширенную анкету', sub: 'Ещё несколько вопросов о питании и привычках.' })
+    }).catch(() => {})
+    return () => { gone = true }
+  }, [userId])
+  return left
+}
+
 // Home = what to do now + a quick glance. Deep charts & history live in Stats.
 export default function Home() {
   const nav = useNavigate()
@@ -54,6 +70,7 @@ export default function Home() {
   const user = useStore(s => s.user)
   const noPlan = !S.routines.length && !S.active
   const trainerName = useTrainerOfNewProfile(noPlan, user?.id)
+  const intakeLeft = useIntakeReminder(user?.id)
   // The banner switched off and the sync stuck: a dot on the gear (Settings → Show connection status).
   const trouble = useConnectionTrouble()
   const [weekOffset, setWeekOffset] = useState(0)
@@ -235,6 +252,12 @@ export default function Home() {
       </div>
     )}
 
+    {intakeLeft && (
+      <div className="card tap-host">
+        <CardHead icon="clipboard" title={intakeLeft.title} sub={intakeLeft.sub} open={{ onClick: () => nav(intakeLeft.to) }}
+          action={<Icon name="chevronRight" className="chev" />} />
+      </div>
+    )}
     {noPlan && trainerName && (
       <div className="card">
         <CardHead icon="calendar" title={`Ваш тренер ${trainerName} готовит программу`} sub="Когда она будет готова, то появится здесь сама." />

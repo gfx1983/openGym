@@ -3258,6 +3258,49 @@ paths:
       responses:
         '200': { description: The trainer's name, or null. }
         '401': { description: Not signed in. }
+  /api/account/intake:
+    get:
+      tags: [admin]
+      operationId: accountIntake
+      summary: "The caller's answers to their trainer's questionnaire"
+      responses:
+        '200': { description: 'The trainer, the answers or null, and whether the app has opened it once.' }
+        '401': { description: Not signed in. }
+    post:
+      tags: [admin]
+      operationId: accountIntakeSave
+      summary: Save answers, a step at a time
+      responses:
+        '200': { description: The answers as stored. }
+        '400': { description: Bad answers, or no consent yet. }
+        '401': { description: Not signed in. }
+        '403': { description: The caller has no trainer. }
+  /api/account/intake/shown:
+    post:
+      tags: [admin]
+      operationId: accountIntakeShown
+      summary: Note that the app has opened the questionnaire by itself
+      responses:
+        '200': { description: Noted. }
+        '401': { description: Not signed in. }
+  /api/account/intake/delete:
+    post:
+      tags: [admin]
+      operationId: accountIntakeDelete
+      summary: Delete the caller's answers
+      responses:
+        '200': { description: Deleted, or there was nothing. }
+        '401': { description: Not signed in. }
+  /api/trainer/client/intake/request:
+    post:
+      tags: [admin]
+      operationId: trainerClientIntakeRequest
+      summary: Ask a client for the longer questionnaire
+      responses:
+        '200': { description: Requested. }
+        '403': { description: Not a trainer. }
+        '404': { description: Not this trainer's client. }
+        '409': { description: The short questionnaire is not done yet. }
   /api/account/trainer/unlink:
     post:
       tags: [admin]

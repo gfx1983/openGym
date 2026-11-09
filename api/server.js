@@ -1477,11 +1477,42 @@ function trainerPlanError(body) {
 // What a trainer sees of it: the whole plan while it waits, only the outcome after that.
 const trainerPlanStatus = p => p && { id: p.id, at: p.at, status: p.status, resolvedAt: p.resolvedAt || null, note: p.note, summary: p.summary };
 
+// A client's answers to their trainer's questionnaire: health among them, so in a file of their own
+// (0600) and not in db.json or the synced state. They were given to one trainer: the file names
+// that trainer, reads as nothing under any other link, and goes when the link ends. Audit lines
+// say that something happened, never what was answered. The questions live in the app
+// (frontend/src/lib/intake-questions.js), so here an answer is only checked for shape and size.
+const INTAKE_VERSION = 1, INTAKE_KEYS_MAX = 80, INTAKE_ANSWER_MAX = 2000;
+const intakeFile = uid => path.join(DATA, 'intake-' + uid.replace(/[^a-zA-Z0-9_-]/g, '') + '.json');
+const dropIntake = uid => { try { fs.unlinkSync(intakeFile(uid)); } catch { /* never filled in */ } };
+const writeIntake = (uid, d) => durableWrite(intakeFile(uid), JSON.stringify(d), 0o600);
+function readIntake(u) {
+  if (!u.trainerId) return null;
+  try {
+    const d = JSON.parse(fs.readFileSync(intakeFile(u.id), 'utf8'));
+    return d && d.trainerId === u.trainerId ? d : null;
+  } catch { return null; }
+}
+const intakeView = d => d && {
+  consentAt: d.consentAt, updatedAt: d.updatedAt, shortDoneAt: d.shortDoneAt || null,
+  extendedRequestedAt: d.extendedRequestedAt || null, extendedDoneAt: d.extendedDoneAt || null, answers: d.answers
+};
+function intakeAnswersError(answers) {
+  if (!answers || typeof answers !== 'object' || Array.isArray(answers)) return 'answers must be an object';
+  const keys = Object.keys(answers);
+  if (keys.length > INTAKE_KEYS_MAX) return 'too many answers';
+  for (const k of keys) {
+    if (!/^[a-z][a-z0-9_]{0,39}$/.test(k)) return 'bad answer key';
+    if (typeof answers[k] !== 'string' || answers[k].length > INTAKE_ANSWER_MAX) return 'bad answer';
+  }
+  return null;
+}
+
 // A trainer who stops being one keeps nothing: their unused codes stop working and their clients
 // go back to being ordinary profiles, so granting the role again does not reopen old access.
 function dropTrainerLinks(trainerId) {
   db.invites = db.invites.filter(i => i.trainerId !== trainerId || i.usedBy);
-  for (const c of db.users) if (c.trainerId === trainerId) { delete c.trainerId; dropTrainerPlan(c.id); }
+  for (const c of db.users) if (c.trainerId === trainerId) { delete c.trainerId; dropTrainerPlan(c.id); dropIntake(c.id); }
 }
 
 // Everything of an account, gone for good: the user record, their passkeys, push subscriptions,
@@ -1497,6 +1528,7 @@ function removeAccount(u) {
   presence.delete(u.id);
   dropTrainerLinks(u.id);
   dropTrainerPlan(u.id);
+  dropIntake(u.id);
   // The training history and any Coach credential of theirs, both outside db.json.
   try { fs.unlinkSync(stateFile(u.id)); } catch { /* already gone */ }
   try { fs.unlinkSync(watchFile(u.id)); } catch { /* never had a watch */ }
@@ -3191,7 +3223,7 @@ const routes = {
     if (!u) return json(res, 404, { error: 'no such user' });
     if (typeof body.trainer !== 'boolean') return json(res, 400, { error: 'trainer must be true or false' });
     if (body.trainer && u.disabled) return json(res, 400, { error: 'enable the account first' });
-    if (body.trainer) { u.trainer = true; delete u.trainerId; dropTrainerPlan(u.id); }
+    if (body.trainer) { u.trainer = true; delete u.trainerId; dropTrainerPlan(u.id); dropIntake(u.id); }
     else { delete u.trainer; dropTrainerLinks(u.id); }
     saveDb();
     audit(req, body.trainer ? 'admin.trainer.grant' : 'admin.trainer.revoke', { user: admin, target: u });
@@ -3257,7 +3289,8 @@ const routes = {
     const clients = db.users.filter(u => u.trainerId === trainer.id && !(EMAIL_AUTH && u.pendingSince)).map(u => {
       const workouts = records((readState(u.id) || {}).workouts);
       const last = workouts[workouts.length - 1];
-      return { id: u.id, name: u.name, created: u.created || null, disabled: !!u.disabled, workouts: workouts.length, lastWorkout: last ? last.d : null };
+      const intake = readIntake(u);
+      return { id: u.id, name: u.name, created: u.created || null, disabled: !!u.disabled, workouts: workouts.length, lastWorkout: last ? last.d : null, intake: intake?.shortDoneAt ? 'done' : intake ? 'draft' : 'none' };
     });
     json(res, 200, { clients });
   },
@@ -3285,8 +3318,26 @@ const routes = {
       // What the plan screens need to show and edit the plan on the trainer's side.
       dayPlan: mapOf(S.dayPlan), programmes: mapOf(S.programmes), programme: S.programme && typeof S.programme === 'object' ? S.programme : null, rotation: S.rotation || null,
       queue: S.queue || null, scheduleMode: S.scheduleMode || null, exWeights: mapOf(S.exWeights), exUnit: mapOf(S.exUnit),
-      plan: trainerPlanStatus(trainerPlanOf(u.id))
+      plan: trainerPlanStatus(trainerPlanOf(u.id)),
+      intake: intakeView(readIntake(u))
     });
+  },
+
+  // The longer part of the questionnaire is opened per client, once they have done the short one.
+  'POST /api/trainer/client/intake/request': async (req, res) => {
+    const trainer = requireTrainer(req, res); if (!trainer) return;
+    const body = await readBody(req);
+    const u = db.users.find(x => x.id === body.id && x.trainerId === trainer.id);
+    if (!u) return json(res, 404, { error: 'no such client' });
+    const d = readIntake(u);
+    if (!d?.shortDoneAt) return json(res, 409, { error: 'the short questionnaire is not done yet' });
+    if (!d.extendedRequestedAt) {
+      d.extendedRequestedAt = new Date().toISOString();
+      writeIntake(u.id, d);
+      audit(req, 'trainer.intake.request', { user: trainer, target: u });
+      sendPush(u.id, { title: 'Анкета', body: trainer.name + ' просит заполнить расширенную анкету', tag: 'trainer-intake' }).catch(() => {});
+    }
+    json(res, 200, { ok: true, intake: intakeView(d) });
   },
 
   // Sending replaces whatever was waiting: what the client's app has not taken in yet is superseded.
@@ -3363,9 +3414,60 @@ const routes = {
     if (user.trainerId) {
       delete user.trainerId;
       dropTrainerPlan(user.id);
+      dropIntake(user.id);
       saveDb();
       audit(req, 'account.trainer.unlink', { user });
     }
+    json(res, 200, { ok: true });
+  },
+
+  // A client's own questionnaire. Someone without a trainer has nobody to answer to.
+  'GET /api/account/intake': async (req, res) => {
+    const user = readSession(req);
+    if (!user) return json(res, 401, { error: 'not signed in' });
+    const trainer = user.trainerId ? db.users.find(u => u.id === user.trainerId) : null;
+    if (!trainer) return json(res, 200, { trainer: null, intake: null, shown: false });
+    json(res, 200, { trainer: { id: trainer.id, name: trainer.name }, intake: intakeView(readIntake(user)), shown: !!user.intakeShownAt });
+  },
+
+  // Once per profile the app opens it by itself; after that it is the reminder on the home screen.
+  'POST /api/account/intake/shown': async (req, res) => {
+    const user = readSession(req);
+    if (!user) return json(res, 401, { error: 'not signed in' });
+    if (!user.intakeShownAt) { user.intakeShownAt = new Date().toISOString(); saveDb(); }
+    json(res, 200, { ok: true });
+  },
+
+  // Saved a step at a time. An empty answer takes the key away.
+  'POST /api/account/intake': async (req, res) => {
+    const user = readSession(req);
+    if (!user) return json(res, 401, { error: 'not signed in' });
+    if (!user.trainerId) return json(res, 403, { error: 'no trainer' });
+    const body = await readBody(req);
+    const bad = intakeAnswersError(body.answers);
+    if (bad) return json(res, 400, { error: bad });
+    if (body.done !== undefined && !['short', 'extended'].includes(body.done)) return json(res, 400, { error: 'done must be short or extended' });
+    const old = readIntake(user);
+    if (!old && body.consent !== true) return json(res, 400, { error: 'consent required', code: 'consent' });
+    const now = new Date().toISOString();
+    const d = old || { v: INTAKE_VERSION, trainerId: user.trainerId, consentAt: now, answers: {} };
+    const answers = { ...d.answers, ...body.answers };
+    for (const k of Object.keys(answers)) if (!answers[k]) delete answers[k];
+    if (Object.keys(answers).length > INTAKE_KEYS_MAX) return json(res, 400, { error: 'too many answers' });
+    d.answers = answers;
+    d.updatedAt = now;
+    if (body.done === 'short') d.shortDoneAt = d.shortDoneAt || now;
+    if (body.done === 'extended') d.extendedDoneAt = d.extendedDoneAt || now;
+    writeIntake(user.id, d);
+    audit(req, 'account.intake.save', { user });
+    json(res, 200, { ok: true, intake: intakeView(d) });
+  },
+
+  'POST /api/account/intake/delete': async (req, res) => {
+    const user = readSession(req);
+    if (!user) return json(res, 401, { error: 'not signed in' });
+    dropIntake(user.id);
+    audit(req, 'account.intake.delete', { user });
     json(res, 200, { ok: true });
   },
 
