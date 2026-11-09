@@ -9,6 +9,7 @@ import path from 'node:path';
 import { spawn } from 'node:child_process';
 import { fileURLToPath } from 'node:url';
 import { boundPort } from './helpers.mjs';
+import * as M from './media-samples.mjs';
 
 const API = path.join(path.dirname(fileURLToPath(import.meta.url)), '..');
 const SECRET = crypto.randomBytes(32).toString('hex');
@@ -33,7 +34,7 @@ async function startServer(t) {
   }));
   const child = spawn(process.execPath, ['server.js'], {
     cwd: API, stdio: ['ignore', 'pipe', 'pipe'],
-    env: { ...process.env, PORT: '0', DATA_DIR: dataDir, ORIGIN: 'http://localhost:8080', RP_ID: 'localhost', INVITE_ONLY: '1', PASSWORD_LOGIN: '1' }
+    env: { ...process.env, PORT: '0', DATA_DIR: dataDir, ORIGIN: 'http://localhost:8080', RP_ID: 'localhost', INVITE_ONLY: '1', PASSWORD_LOGIN: '1', MEDIA_MIN_FREE_MB: '1' }
   });
   const gone = new Promise(r => child.once('exit', r));
   t.after(async () => { child.kill('SIGKILL'); await gone; fs.rmSync(dataDir, { recursive: true, force: true, maxRetries: 5, retryDelay: 50 }); });
@@ -48,6 +49,7 @@ async function startServer(t) {
   });
   return {
     file: path.join(dataDir, `intake-${CLIENT}.json`), dataDir, log: () => log,
+    put: (bytes, uid) => fetch(`http://127.0.0.1:${port}/api/media/${M.sha(bytes)}`, { method: 'PUT', headers: { Cookie: `gymsid=${mint(uid)}`, 'Content-Type': 'image/jpeg' }, body: bytes }),
     get: (url, uid) => call('GET', url, uid), post: (url, uid, body = {}) => call('POST', url, uid, body)
   };
 }
@@ -144,4 +146,64 @@ test('the app opens it by itself only once', async t => {
   assert.equal((await (await h.get(SAVE, CLIENT)).json()).shown, false);
   await h.post('/api/account/intake/shown', CLIENT);
   assert.equal((await (await h.get(SAVE, CLIENT)).json()).shown, true);
+});
+
+async function withPhotos(t) {
+  const h = await startServer(t);
+  const still = M.jpeg(1000), day = M.jpeg(1200), clip = M.jpeg(1400), exercise = M.jpeg(1600);
+  for (const b of [still, day, clip, exercise]) assert.equal((await h.put(b, CLIENT)).status, 201);
+  const ref = (b, kind = 'image') => ({ hash: M.sha(b), kind, mime: 'image/jpeg', size: b.length });
+  const state = {
+    workouts: [{ id: 'w1', d: '2026-11-01', entries: [], media: [ref(still), ref(clip, 'video')] }],
+    dayPhotos: { [M.sha(day)]: { d: '2026-11-05', m: ref(day), _ts: 1 } },
+    customEx: [{ id: 'x', n: 'X', media: ref(exercise) }]
+  };
+  fs.writeFileSync(path.join(h.dataDir, `state-${CLIENT}.json`), JSON.stringify(state));
+  const photo = (b, uid = TRAINER, id = CLIENT) => h.get(`/api/trainer/client/photo?id=${id}&hash=${M.sha(b)}`, uid);
+  const open = on => h.post('/api/account/trainer/photos', CLIENT, { on });
+  const list = async () => (await (await h.get(`/api/trainer/client?id=${CLIENT}`, TRAINER)).json()).photos;
+  return { h, still, day, clip, exercise, photo, open, list };
+}
+
+test('photos stay closed until the client opens them, and close again', async t => {
+  const { still, photo, open, list } = await withPhotos(t);
+  assert.equal(await list(), null);
+  assert.equal((await photo(still)).status, 404);
+  assert.equal((await open(true)).status, 200);
+  assert.equal((await list()).length, 2);
+  const r = await photo(still);
+  assert.equal(r.status, 200);
+  assert.equal(r.headers.get('cache-control'), 'private, no-store');
+  await open(false);
+  assert.equal((await photo(still)).status, 404);
+});
+
+test('a trainer gets progress photos only: no video, no exercise media, and only their own client', async t => {
+  const { still, day, clip, exercise, photo, open, list } = await withPhotos(t);
+  await open(true);
+  assert.deepEqual((await list()).map(p => p.hash), [M.sha(day), M.sha(still)], 'newest first');
+  assert.equal((await photo(day)).status, 200);
+  assert.equal((await photo(clip)).status, 404);
+  assert.equal((await photo(exercise)).status, 404);
+  assert.equal((await photo(still, OTHER)).status, 404);
+  assert.equal((await photo(still, PLAIN)).status, 403);
+});
+
+for (const [name, end] of [
+  ['the client leaves', h => h.post('/api/account/trainer/unlink', CLIENT)],
+  ['the trainer loses the role', h => h.post('/api/admin/user/trainer', ADMIN, { id: TRAINER, trainer: false })],
+]) {
+  test(`opened photos do not survive when ${name}`, async t => {
+    const { h, open } = await withPhotos(t);
+    await open(true);
+    assert.equal((await end(h)).status, 200);
+    const db = JSON.parse(fs.readFileSync(path.join(h.dataDir, 'db.json'), 'utf8'));
+    assert.equal(db.users.find(u => u.id === CLIENT).photosForTrainer, undefined);
+  });
+}
+
+test('someone without a trainer has nothing to open', async t => {
+  const h = await startServer(t);
+  assert.equal((await h.post('/api/account/trainer/photos', PLAIN, { on: true })).status, 403);
+  assert.equal((await h.post('/api/account/trainer/photos', CLIENT, { on: 'yes' })).status, 400);
 });

@@ -3,9 +3,12 @@ import { useNavigate, useSearchParams } from 'react-router-dom'
 import { api } from '../lib/api.js'
 import { EXTENDED_STEPS, SHORT_STEPS, isShown, missing, stepAnswers } from '../lib/intake-questions.js'
 import { useUI } from '../store/useUI.js'
+import { useStore } from '../store/useStore.js'
+import { isOn } from '../lib/modules.js'
 import { confirmSheet } from '../sheets.jsx'
 import Icon from '../components/Icon.jsx'
 import IntakeAnswers from '../components/IntakeAnswers.jsx'
+import TrainerPhotosRow from '../components/TrainerPhotosRow.jsx'
 import { Button, TextArea, TextField } from '../components/ui.jsx'
 
 // The questionnaire for a trainer's client: consent first, then a step per screen, each saved as
@@ -28,6 +31,7 @@ export default function Intake() {
   const nav = useNavigate()
   const [params] = useSearchParams()
   const toast = useUI(s => s.toast)
+  const canPhotos = useStore(s => isOn(s.S, 'body'))
   const extended = params.get('part') === 'extended'
   const steps = extended ? EXTENDED_STEPS : SHORT_STEPS
   const [d, setD] = useState(null)
@@ -86,7 +90,7 @@ export default function Intake() {
   const last = step === steps.length - 1
   const blocked = missing(current, answers).length > 0
   const put = (id, v) => setAnswers(a => ({ ...a, [id]: v }))
-  const next = async () => {
+  const next = async to => {
     setBusy(true)
     try {
       const r = await api('/api/account/intake', { method: 'POST', body: JSON.stringify({
@@ -95,7 +99,7 @@ export default function Intake() {
         ...(last ? { done: extended ? 'extended' : 'short' } : {}),
       }) })
       setD(x => ({ ...x, intake: r.intake }))
-      if (last) { toast('Анкета сохранена'); leave() } else { setStep(step + 1); window.scrollTo?.(0, 0) }
+      if (last) { toast('Анкета сохранена'); nav(to || '/home') } else { setStep(step + 1); window.scrollTo?.(0, 0) }
     } catch (e) { toast(e.message) } finally { setBusy(false) }
   }
   return <div className="narrow">
@@ -103,11 +107,16 @@ export default function Intake() {
     <div className="dim small">Шаг {step + 1} из {steps.length}</div>
     <div className="card" style={{ marginTop: 8 }}>
       <h2 style={{ margin: 0 }}>{current.title}</h2>
+      {current.photos && <>
+        <p className="small">Фото помогут тренеру оценить текущую форму и расставить акценты в программе. Лучше снять себя в полный рост спереди, сбоку и сзади при хорошем свете.</p>
+        <TrainerPhotosRow />
+        {canPhotos && <Button onClick={() => next('/progress-photos')} disabled={busy}>Сохранить и добавить фото</Button>}
+      </>}
       {current.questions.filter(q => isShown(q, answers)).map(q => <Question key={q.id} q={q} value={answers[q.id]} onChange={v => put(q.id, v)} />)}
     </div>
     <div className="row between" style={{ gap: 8 }}>
       {step > 0 ? <Button onClick={() => setStep(step - 1)}>Назад</Button> : <Button onClick={leave}>Заполнить позже</Button>}
-      <Button variant="primary" disabled={blocked || busy} onClick={next}>{last ? 'Готово' : 'Далее'}</Button>
+      <Button variant="primary" disabled={blocked || busy} onClick={() => next()}>{last ? 'Готово' : 'Далее'}</Button>
     </div>
   </div>
 }

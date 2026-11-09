@@ -1,6 +1,6 @@
 import { useEffect, useMemo, useState } from 'react'
 import { useNavigate, useParams } from 'react-router-dom'
-import { api } from '../lib/api.js'
+import { api, appBase } from '../lib/api.js'
 import { exerciseNameText, fmtDate, fmtDur, fmtVol } from '../lib/format.js'
 import { exOr } from '../lib/exercises.js'
 import { setLabel, setsDone, workoutVolume } from '../lib/history.js'
@@ -73,6 +73,24 @@ function IntakeCard({ intake, id, setIntake }) {
   </div>
 }
 
+// Only what the client has opened. Loaded on request, a tap on one shows it whole.
+function PhotosCard({ photos, id }) {
+  const [open, setOpen] = useState(false)
+  const [big, setBig] = useState(null)
+  const url = hash => appBase().replace(/\/$/, '') + '/api/trainer/client/photo?id=' + encodeURIComponent(id) + '&hash=' + hash
+  return <div className="card">
+    <div className="row between"><h2 style={{ margin: 0 }}>Фото прогресса</h2>
+      {!!photos?.length && <Button size="sm" aria-expanded={open} onClick={() => setOpen(x => !x)}>{open ? 'Скрыть' : 'Показать'}</Button>}</div>
+    <div className="dim small" style={{ marginTop: 6 }}>{!photos ? 'Клиент не открыл доступ к фото.' : photos.length ? 'Фото: ' + photos.length : 'Клиент открыл доступ, но фото пока нет.'}</div>
+    {open && <div style={{ display: 'grid', gridTemplateColumns: big ? '1fr' : 'repeat(3, 1fr)', gap: 6, marginTop: 8 }}>
+      {photos.filter(p => !big || p.hash === big).map(p => <button key={p.hash} style={{ background: 'none', border: 0, padding: 0, color: 'inherit' }} onClick={() => setBig(b => b ? null : p.hash)}>
+        <img src={url(p.hash)} alt={'Фото от ' + p.d} loading="lazy" style={{ width: '100%', borderRadius: 8, display: 'block', aspectRatio: big ? undefined : '3 / 4', objectFit: 'cover' }} />
+        <div className="dim" style={{ fontSize: '.7rem' }}>{fmtDate(String(p.d).slice(0, 10), true)}</div>
+      </button>)}
+    </div>}
+  </div>
+}
+
 // What the client actually lifts now: their last session of it, else their confirmed working weight.
 function liftedNow(d, workouts, exId) {
   for (const w of workouts) {
@@ -142,6 +160,7 @@ export default function TrainerClient() {
     <div className="adm-lead" style={{ marginBottom: 12 }}>С нами с {d.user.created ? fmtDate(d.user.created.slice(0, 10)) : '–'}</div>
 
     <IntakeCard intake={d.intake} id={d.user.id} setIntake={setIntake} />
+    <PhotosCard photos={d.photos} id={d.user.id} />
 
     <div className="card">
       <h2 style={{ margin: 0 }}>Вес тела</h2>

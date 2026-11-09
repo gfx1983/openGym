@@ -3258,6 +3258,25 @@ paths:
       responses:
         '200': { description: The trainer's name, or null. }
         '401': { description: Not signed in. }
+  /api/account/trainer/photos:
+    post:
+      tags: [admin]
+      operationId: accountTrainerPhotos
+      summary: Open or close the caller's progress photos to their trainer
+      responses:
+        '200': { description: The new setting. }
+        '400': { description: "`on` is not a boolean." }
+        '401': { description: Not signed in. }
+        '403': { description: The caller has no trainer. }
+  /api/trainer/client/photo:
+    get:
+      tags: [admin]
+      operationId: trainerClientPhoto
+      summary: One progress photo of a client who has opened them
+      responses:
+        '200': { description: The image. }
+        '403': { description: Not a trainer. }
+        '404': { description: 'Not this client, not opened, or not one of their progress photos.' }
   /api/account/intake:
     get:
       tags: [admin]

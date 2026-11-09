@@ -4,7 +4,8 @@
 // or their old answer stops showing. Russian-only, like views/Trainer.jsx.
 //
 // A step is one screen. `required` holds the short part's Next until it is answered; `when` shows
-// a question only after a given answer to another one.
+// a question only after a given answer to another one. A step with `photos` asks for no answers:
+// it opens the progress photos to the trainer.
 const YES_NO = [['no', 'Нет'], ['yes', 'Да']]
 
 export const SHORT_STEPS = [
@@ -79,6 +80,7 @@ export const EXTENDED_STEPS = [
     { id: 'barriers', label: 'Что мешало заниматься или держать результат раньше?', type: 'text' },
     { id: 'contact', label: 'Как и как часто вам удобно общаться с тренером?', type: 'text' },
   ] },
+  { title: 'Фото', photos: true, questions: [] },
 ]
 
 export const isShown = (q, answers) => !q.when || answers[q.when[0]] === q.when[1]

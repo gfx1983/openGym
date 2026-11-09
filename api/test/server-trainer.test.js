@@ -210,14 +210,14 @@ test('a trainer reads their own client and nobody else, and gets only what the p
 
 test('a client sees who their trainer is and can leave, which ends the access at once', async t => {
   const h = await startServer(t);
-  assert.deepEqual(await (await h.get('/api/account/trainer', CLIENT)).json(), { trainer: { id: TRAINER, name: 'Trainer' }, plan: null });
-  assert.deepEqual(await (await h.get('/api/account/trainer', PLAIN)).json(), { trainer: null, plan: null });
+  assert.deepEqual(await (await h.get('/api/account/trainer', CLIENT)).json(), { trainer: { id: TRAINER, name: 'Trainer' }, photosShared: false, plan: null });
+  assert.deepEqual(await (await h.get('/api/account/trainer', PLAIN)).json(), { trainer: null, photosShared: false, plan: null });
   assert.equal((await h.get('/api/account/trainer', null)).status, 401);
   assert.equal((await h.post('/api/account/trainer/unlink', null)).status, 401);
 
   assert.equal((await h.get(`/api/trainer/client?id=${CLIENT}`, TRAINER)).status, 200);
   assert.equal((await h.post('/api/account/trainer/unlink', CLIENT)).status, 200);
-  assert.deepEqual(await (await h.get('/api/account/trainer', CLIENT)).json(), { trainer: null, plan: null });
+  assert.deepEqual(await (await h.get('/api/account/trainer', CLIENT)).json(), { trainer: null, photosShared: false, plan: null });
   assert.equal((await h.get(`/api/trainer/client?id=${CLIENT}`, TRAINER)).status, 404);
   assert.deepEqual((await (await h.get('/api/trainer/clients', TRAINER)).json()).clients, []);
   assert.equal((await h.post('/api/account/trainer/unlink', CLIENT)).status, 200, 'leaving twice is not an error');

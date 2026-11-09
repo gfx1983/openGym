@@ -12,6 +12,7 @@ const mocks = vi.hoisted(() => ({ answer: null, urls: [] }))
 
 vi.mock('react-router-dom', () => ({ useNavigate: () => () => {}, useParams: () => ({ id: 'c 1' }) }))
 vi.mock('../lib/api.js', () => ({
+  appBase: () => '',
   api: url => {
     mocks.urls.push(url)
     return mocks.answer instanceof Error ? Promise.reject(mocks.answer) : Promise.resolve(mocks.answer)
@@ -91,6 +92,20 @@ describe('TrainerClient', () => {
     expect(host.textContent).toContain('Женский')
     expect(host.textContent).toContain('колено')
     expect(host.textContent).toContain('Попросить расширенную анкету')
+  })
+
+  it('says when photos are closed, and loads none until asked', async () => {
+    mocks.answer = client({ photos: null })
+    await render()
+    expect(host.textContent).toContain('Клиент не открыл доступ к фото')
+    await act(async () => { root.unmount() })
+    host.remove()
+    mocks.answer = client({ photos: [{ hash: 'a'.repeat(64), d: '2026-11-01' }] })
+    await render()
+    expect(host.querySelector('img')).toBeNull()
+    const show = [...host.querySelectorAll('button')].find(b => b.textContent === 'Показать')
+    await act(async () => { show.click() })
+    expect(host.querySelector('img').getAttribute('src')).toBe('/api/trainer/client/photo?id=c1&hash=' + 'a'.repeat(64))
   })
 
   it('skips shapeless entries instead of crashing, and opens a workout to show its sets', async () => {

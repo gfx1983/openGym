@@ -1508,11 +1508,24 @@ function intakeAnswersError(answers) {
   return null;
 }
 
+// Progress photos a client has opened to their trainer: the switch is on the user and ends with
+// the link. Stills only, the ones the Progress photos screen shows, never videos or an exercise's
+// media, though they sit in the same folder. Read off the state each time, so a photo the client
+// took away is closed at once.
+function clientPhotos(S) {
+  const out = [];
+  const ok = m => !!m && typeof m === 'object' && m.kind !== 'video' && HASH_RE.test(String(m.hash));
+  for (const w of records(S?.workouts)) for (const m of Array.isArray(w.media) ? w.media : []) if (ok(m)) out.push({ hash: m.hash, d: w.d });
+  for (const [hash, e] of Object.entries(mapOf(S?.dayPhotos))) if (ok(e?.m) && e.m.hash === hash && e.d) out.push({ hash, d: e.d });
+  const seen = new Set();
+  return out.filter(p => !seen.has(p.hash) && seen.add(p.hash)).sort((a, b) => String(b.d).localeCompare(String(a.d)));
+}
+
 // A trainer who stops being one keeps nothing: their unused codes stop working and their clients
 // go back to being ordinary profiles, so granting the role again does not reopen old access.
 function dropTrainerLinks(trainerId) {
   db.invites = db.invites.filter(i => i.trainerId !== trainerId || i.usedBy);
-  for (const c of db.users) if (c.trainerId === trainerId) { delete c.trainerId; dropTrainerPlan(c.id); dropIntake(c.id); }
+  for (const c of db.users) if (c.trainerId === trainerId) { delete c.trainerId; dropTrainerPlan(c.id); dropIntake(c.id); delete c.photosForTrainer; }
 }
 
 // Everything of an account, gone for good: the user record, their passkeys, push subscriptions,
@@ -3223,7 +3236,7 @@ const routes = {
     if (!u) return json(res, 404, { error: 'no such user' });
     if (typeof body.trainer !== 'boolean') return json(res, 400, { error: 'trainer must be true or false' });
     if (body.trainer && u.disabled) return json(res, 400, { error: 'enable the account first' });
-    if (body.trainer) { u.trainer = true; delete u.trainerId; dropTrainerPlan(u.id); dropIntake(u.id); }
+    if (body.trainer) { u.trainer = true; delete u.trainerId; dropTrainerPlan(u.id); dropIntake(u.id); delete u.photosForTrainer; }
     else { delete u.trainer; dropTrainerLinks(u.id); }
     saveDb();
     audit(req, body.trainer ? 'admin.trainer.grant' : 'admin.trainer.revoke', { user: admin, target: u });
@@ -3319,8 +3332,20 @@ const routes = {
       dayPlan: mapOf(S.dayPlan), programmes: mapOf(S.programmes), programme: S.programme && typeof S.programme === 'object' ? S.programme : null, rotation: S.rotation || null,
       queue: S.queue || null, scheduleMode: S.scheduleMode || null, exWeights: mapOf(S.exWeights), exUnit: mapOf(S.exUnit),
       plan: trainerPlanStatus(trainerPlanOf(u.id)),
-      intake: intakeView(readIntake(u))
+      intake: intakeView(readIntake(u)),
+      photos: u.photosForTrainer ? clientPhotos(S) : null
     });
+  },
+
+  'GET /api/trainer/client/photo': async (req, res) => {
+    const trainer = requireTrainer(req, res); if (!trainer) return;
+    const q = new URL(req.url, 'http://x').searchParams;
+    const u = db.users.find(x => x.id === q.get('id') && x.trainerId === trainer.id);
+    const hash = q.get('hash');
+    if (!u || !u.photosForTrainer || !clientPhotos(readState(u.id)).some(p => p.hash === hash)) throw new MediaError(404, 'media-missing');
+    const f = MEDIA.file(u.id, hash);
+    if (!f) throw new MediaError(404, 'media-missing');
+    await sendMediaFile(res, f, hash);
   },
 
   // The longer part of the questionnaire is opened per client, once they have done the short one.
@@ -3384,6 +3409,7 @@ const routes = {
     const plan = trainer ? trainerPlanOf(user.id) : null;
     json(res, 200, {
       trainer: trainer ? { id: trainer.id, name: trainer.name } : null,
+      photosShared: !!(trainer && user.photosForTrainer),
       plan: plan && plan.status === 'pending' ? {
         id: plan.id, at: plan.at, note: plan.note, summary: plan.summary, bundle: plan.bundle, base: plan.base,
         removed: plan.removed, removedProgrammes: plan.removedProgrammes, run: plan.run, schedule: plan.schedule
@@ -3408,6 +3434,18 @@ const routes = {
     json(res, 200, { ok: true });
   },
 
+  'POST /api/account/trainer/photos': async (req, res) => {
+    const user = readSession(req);
+    if (!user) return json(res, 401, { error: 'not signed in' });
+    const body = await readBody(req);
+    if (typeof body.on !== 'boolean') return json(res, 400, { error: 'on must be true or false' });
+    if (!user.trainerId) return json(res, 403, { error: 'no trainer' });
+    if (body.on) user.photosForTrainer = new Date().toISOString(); else delete user.photosForTrainer;
+    saveDb();
+    audit(req, body.on ? 'account.trainer.photos.on' : 'account.trainer.photos.off', { user });
+    json(res, 200, { ok: true, photosShared: body.on });
+  },
+
   'POST /api/account/trainer/unlink': async (req, res) => {
     const user = readSession(req);
     if (!user) return json(res, 401, { error: 'not signed in' });
@@ -3415,6 +3453,7 @@ const routes = {
       delete user.trainerId;
       dropTrainerPlan(user.id);
       dropIntake(user.id);
+      delete user.photosForTrainer;
       saveDb();
       audit(req, 'account.trainer.unlink', { user });
     }

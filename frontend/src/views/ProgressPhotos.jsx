@@ -24,6 +24,7 @@ import { useMediaPicker } from '../components/CustomMediaField.jsx'
 import { CustomThumb, MediaView, useMediaUrl } from '../components/CustomMedia.jsx'
 import { Button } from '../components/ui.jsx'
 import DateField from '../components/DateField.jsx'
+import TrainerPhotosRow from '../components/TrainerPhotosRow.jsx'
 import Icon from '../components/Icon.jsx'
 
 const toast = m => useUI.getState().toast(m)
@@ -270,6 +271,8 @@ export default function ProgressPhotos() {
         ? <Button size="sm" variant="ghost" onClick={cancelCompare}>{t('Cancel')}</Button>
         : <Button size="sm" variant="tinted" onClick={() => setComparing(true)}>{t('Compare')}</Button>)}
     </div>
+
+    {!comparing && <TrainerPhotosRow />}
 
     {!comparing && showAdd && <div className="row" style={{ marginBottom: 16 }}>
       <Button icon={busy ? 'image' : 'camera'} disabled={!canAdd || busy} onClick={() => fileRef.current?.click()}>
