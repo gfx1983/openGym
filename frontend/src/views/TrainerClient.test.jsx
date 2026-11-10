@@ -8,9 +8,10 @@ import TrainerClient from './TrainerClient.jsx'
 
 globalThis.IS_REACT_ACT_ENVIRONMENT = true
 
-const mocks = vi.hoisted(() => ({ answer: null, urls: [] }))
+const mocks = vi.hoisted(() => ({ answer: null, urls: [], printed: [], state: null }))
 
-vi.mock('react-router-dom', () => ({ useNavigate: () => () => {}, useParams: () => ({ id: 'c 1' }) }))
+vi.mock('react-router-dom', () => ({ useNavigate: () => () => {}, useParams: () => ({ id: 'c 1' }), useLocation: () => ({ state: mocks.state }) }))
+vi.mock('../lib/intake-print.js', () => ({ printIntake: (...a) => { mocks.printed.push(a) } }))
 vi.mock('../lib/api.js', () => ({
   appBase: () => '',
   api: url => {
@@ -33,7 +34,7 @@ const render = async () => {
   await act(async () => { root.render(<TrainerClient />) })
 }
 
-beforeEach(() => { mocks.urls = [] })
+beforeEach(() => { mocks.urls = []; mocks.printed = []; mocks.state = null })
 afterEach(async () => {
   await act(async () => { root?.unmount() })
   host?.remove()
@@ -81,6 +82,26 @@ describe('TrainerClient', () => {
     await render()
     expect(host.textContent).toContain('Клиент ещё не заполнял')
     expect(host.textContent).not.toContain('Показать')
+    expect(host.textContent).not.toContain('Сохранить в PDF')
+  })
+
+  it('prints the questionnaire with the client\'s name', async () => {
+    const intake = { shortDoneAt: 'x', answers: { sex: 'male' } }
+    mocks.answer = client({ intake })
+    await render()
+    const pdf = [...host.querySelectorAll('button')].find(b => b.textContent === 'Сохранить в PDF')
+    await act(async () => { pdf.click() })
+    expect(mocks.printed).toEqual([[intake, 'Ира']])
+  })
+
+  it('goes back to Home when opened from there, else to the client list', async () => {
+    mocks.answer = client()
+    await render()
+    expect(host.querySelector('[aria-label="Назад"]').dataset.back).toBe('/trainer')
+    await act(async () => { root.unmount() }); host.remove()
+    mocks.state = { from: '/home' }
+    await render()
+    expect(host.querySelector('[aria-label="Назад"]').dataset.back).toBe('/home')
   })
 
   it('opens the answers as text and offers the longer part after the short one', async () => {

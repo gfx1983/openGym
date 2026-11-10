@@ -1,5 +1,5 @@
 import { useEffect, useMemo, useState } from 'react'
-import { useNavigate, useParams } from 'react-router-dom'
+import { useLocation, useNavigate, useParams } from 'react-router-dom'
 import { api, appBase } from '../lib/api.js'
 import { exerciseNameText, fmtDate, fmtDur, fmtVol } from '../lib/format.js'
 import { exOr } from '../lib/exercises.js'
@@ -14,6 +14,7 @@ import Icon from '../components/Icon.jsx'
 import LineChart from '../components/LineChart.jsx'
 import { Button } from '../components/ui.jsx'
 import IntakeAnswers from '../components/IntakeAnswers.jsx'
+import { printIntake } from '../lib/intake-print.js'
 import '../admin.css'
 
 // One client: what they logged and what they follow. The document comes straight off their state
@@ -54,7 +55,7 @@ function PlanStatus({ plan, id, setPlan }) {
 }
 
 // Health among the answers: read here only, never copied into the plan or a note by the app.
-function IntakeCard({ intake, id, setIntake }) {
+function IntakeCard({ intake, id, name, setIntake }) {
   const toast = useUI(s => s.toast)
   const [open, setOpen] = useState(false)
   const ask = () => api('/api/trainer/client/intake/request', { method: 'POST', body: JSON.stringify({ id }) })
@@ -69,6 +70,7 @@ function IntakeCard({ intake, id, setIntake }) {
       {intake && <Button size="sm" aria-expanded={open} onClick={() => setOpen(x => !x)}>{open ? 'Скрыть' : 'Показать'}</Button>}</div>
     <div className="dim small" style={{ marginTop: 6 }}>{state}</div>
     {open && <IntakeAnswers answers={intake.answers} />}
+    {intake && <Button size="sm" icon="download" style={{ marginTop: 8 }} onClick={() => printIntake(intake, name)}>Сохранить в PDF</Button>}
     {intake?.shortDoneAt && !intake.extendedRequestedAt && <Button size="sm" style={{ marginTop: 8 }} onClick={ask}>Попросить расширенную анкету</Button>}
   </div>
 }
@@ -129,8 +131,10 @@ export default function TrainerClient() {
   const toast = useUI(s => s.toast)
   useEffect(() => { api('/api/trainer/client?id=' + encodeURIComponent(id)).then(setD).catch(e => setErr(e.message)) }, [id])
 
+  // Opened from Home's client list, Back goes there (components/TrainerClientsHome.jsx).
+  const back = useLocation().state?.from === '/home' ? '/home' : '/trainer'
   const header = title => <div className="hdr">
-    <button className="iconbtn" data-back="/trainer" onClick={() => nav('/trainer')} aria-label="Назад"><Icon name="chevronLeft" /></button>
+    <button className="iconbtn" data-back={back} onClick={() => nav(back)} aria-label="Назад"><Icon name="chevronLeft" /></button>
     <div style={{ flex: 1, marginInlineStart: 12 }}><h1 style={{ margin: 0 }}>{title}</h1></div>
   </div>
 
@@ -159,7 +163,7 @@ export default function TrainerClient() {
     {header(d.user.name)}
     <div className="adm-lead" style={{ marginBottom: 12 }}>С нами с {d.user.created ? fmtDate(d.user.created.slice(0, 10)) : '–'}</div>
 
-    <IntakeCard intake={d.intake} id={d.user.id} setIntake={setIntake} />
+    <IntakeCard intake={d.intake} id={d.user.id} name={d.user.name} setIntake={setIntake} />
     <PhotosCard photos={d.photos} id={d.user.id} />
 
     <div className="card">

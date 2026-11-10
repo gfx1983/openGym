@@ -8,6 +8,7 @@ import { isOn } from '../lib/modules.js'
 import { confirmSheet } from '../sheets.jsx'
 import Icon from '../components/Icon.jsx'
 import IntakeAnswers from '../components/IntakeAnswers.jsx'
+import { printIntake } from '../lib/intake-print.js'
 import TrainerPhotosRow from '../components/TrainerPhotosRow.jsx'
 import { Button, TextArea, TextField } from '../components/ui.jsx'
 
@@ -32,6 +33,7 @@ export default function Intake() {
   const [params] = useSearchParams()
   const toast = useUI(s => s.toast)
   const canPhotos = useStore(s => isOn(s.S, 'body'))
+  const user = useStore(s => s.user)
   const extended = params.get('part') === 'extended'
   const steps = extended ? EXTENDED_STEPS : SHORT_STEPS
   const [d, setD] = useState(null)
@@ -81,6 +83,7 @@ export default function Intake() {
       {header('Моя анкета')}
       <div className="card"><IntakeAnswers answers={intake.answers} /></div>
       <Button variant="primary" onClick={() => { setStep(0); setEditing(true) }}>Изменить ответы</Button>
+      <Button style={{ marginTop: 8 }} icon="download" onClick={() => printIntake(intake, user?.name)}>Сохранить в PDF</Button>
       {intake.extendedRequestedAt && <Button style={{ marginTop: 8 }} onClick={() => { setStep(0); nav('/intake?part=extended') }}>Расширенная анкета</Button>}
       <Button style={{ marginTop: 8 }} onClick={remove}>Удалить анкету</Button>
     </div>

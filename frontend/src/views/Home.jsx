@@ -13,6 +13,7 @@ import Icon from '../components/Icon.jsx'
 import CardHead from '../components/CardHead.jsx'
 import QueueRow from '../components/QueueRow.jsx'
 import TrainerPlanNotice from '../components/TrainerPlanNotice.jsx'
+import TrainerClientsHome from '../components/TrainerClientsHome.jsx'
 import MiniBodyMap from '../components/MiniBodyMap.jsx'
 import { queueOf, queueView, weekTally, pinState } from '../lib/queue.js'
 import { workoutsLeft } from '../lib/week-left.js'
@@ -227,6 +228,9 @@ export default function Home() {
       </div>}
       <SeasonDeco spot="home-hero" />
     </div>
+
+    {/* A trainer's clients, the same list as Settings → Account → My clients. */}
+    <TrainerClientsHome />
 
     {/* Monday: Your week; the 1st: Your month (lib/recap.js). Off in Settings → Look & Home. */}
     <RecapHomeCard S={S} />
